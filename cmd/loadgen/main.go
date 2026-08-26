@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"sync"
 	"time"
+	"crypto/tls"
+	"net"
+	"math"
 )
 
 type Result struct {
@@ -17,15 +20,22 @@ type Result struct {
 }
 
 type Config struct {
-	URL         string
-	Requests    int
-	Concurrency int
-	Timeout     time.Duration
+	URL              string
+	Requests         int
+	Concurrency      int
+	Timeout          time.Duration
+	DisableKeepAlive bool
+	Insecure         bool
+	HTTP2            bool
 }
 
-func doRequest(client *http.Client, url string) Result {
+func doRequest(ctx context.Context, client *http.Client, url string) Result {
 	start := time.Now()
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return Result{Duration: time.Since(start), Err: err}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return Result{Duration: time.Since(start), Err: err}
 	}
@@ -38,7 +48,9 @@ func Run(ctx context.Context, cfg Config) []Result {
 	jobs := make(chan struct{}, cfg.Concurrency)
 	results := make(chan Result, cfg.Concurrency)
 
-	client := &http.Client{Timeout: cfg.Timeout}
+	tr := newTransport(cfg)
+	defer tr.CloseIdleConnections()
+	client := newClient(cfg, tr)
 
 	// 1. Воркеры
 	var wg sync.WaitGroup
@@ -47,7 +59,7 @@ func Run(ctx context.Context, cfg Config) []Result {
 		go func() {
 			defer wg.Done()
 			for range jobs {
-				results <- doRequest(client, cfg.URL)
+				results <- doRequest(ctx, client, cfg.URL)
 			}
 		}()
 	}
@@ -78,12 +90,48 @@ func Run(ctx context.Context, cfg Config) []Result {
 	return all
 }
 
+func newTransport(cfg Config) *http.Transport {
+	return &http.Transport{
+		MaxIdleConns:        cfg.Concurrency,
+		MaxIdleConnsPerHost: cfg.Concurrency,
+		MaxConnsPerHost:     cfg.Concurrency,
+		IdleConnTimeout:     90 * time.Second,
+
+		DisableKeepAlives:  cfg.DisableKeepAlive,
+		DisableCompression: true,
+
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: cfg.Timeout,
+
+		ForceAttemptHTTP2: cfg.HTTP2,
+		//nolint:gosec // осознанный флаг --insecure
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.Insecure},
+	}
+}
+
+func newClient(cfg Config, tr *http.Transport) *http.Client {
+	return &http.Client{
+		Timeout:   cfg.Timeout,
+		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
 func main() {
-	cfg := Config{
-		URL:         "http://localhost:8000",
-		Requests:    200,
-		Concurrency: 20,
-		Timeout:     5 * time.Second,
+		cfg := Config{
+		URL:              "http://localhost:8080",
+		Requests:         5000,
+		Concurrency:      50,
+		Timeout:          10 * time.Second,
+		DisableKeepAlive: false,
+		HTTP2:            false,
 	}
 
 	fmt.Printf("Запуск %d запросов к %s в %d потоков...\n\n", cfg.Requests, cfg.URL, cfg.Concurrency)
@@ -95,7 +143,7 @@ func main() {
 	var (
 		totalDuration time.Duration
 		successCount  int
-		minD          = time.Duration(1<<63 - 1)
+		minD          = time.Duration(math.MaxInt64)
 		maxD          time.Duration
 		totalBytes    int64
 	)
