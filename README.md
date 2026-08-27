@@ -86,9 +86,10 @@ internal/report/  представление: текст с цветами и г
 ## Разработка
 
 ```bash
-go test -race ./...
-go vet ./...
-gofmt -l ./cmd ./internal    # пусто = всё отформатировано
+make build    # bin/loadgen с версией из git describe
+make test     # go test -race ./...
+make lint     # golangci-lint + go vet + проверка gofmt
+make cross    # dist/: linux, darwin, windows — amd64 и arm64
 ```
 
 <!--
