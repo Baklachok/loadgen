@@ -12,6 +12,16 @@ import (
 // значений, а не про time.Duration.
 func ms(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 
+// resp — сервер ответил, failed — ответа не было. Два конструктора вместо
+// литералов runner.Result по всему файлу: в тестах важен исход, а не поля.
+func resp(code int, d time.Duration) runner.Result {
+	return runner.Result{Duration: d, StatusCode: code}
+}
+
+func failed(err error, d time.Duration) runner.Result {
+	return runner.Result{Duration: d, Err: err}
+}
+
 func TestPercentile(t *testing.T) {
 
 	tests := []struct {
@@ -56,13 +66,13 @@ func TestCompute(t *testing.T) {
 		{Duration: ms(10), StatusCode: 200, BytesRead: 100},
 		{Duration: ms(20), StatusCode: 200, BytesRead: 100},
 		{Duration: ms(30), StatusCode: 500, BytesRead: 50},
-		{Duration: ms(5), Err: context.DeadlineExceeded},
+		failed(context.DeadlineExceeded, ms(5)),
 	}
 
 	s := Compute(results, 2*time.Second)
 
-	if s.Total != 4 || s.Success != 3 || s.Failed != 1 {
-		t.Errorf("counts: total=%d success=%d failed=%d", s.Total, s.Success, s.Failed)
+	if s.Total != 4 || s.OK != 2 || s.NonOK != 1 || s.Failed != 1 {
+		t.Errorf("counts: total=%d ok=%d non2xx=%d failed=%d", s.Total, s.OK, s.NonOK, s.Failed)
 	}
 	if s.RPS != 1.5 {
 		t.Errorf("RPS = %v, want 1.5", s.RPS)
@@ -157,9 +167,9 @@ func TestHistogram(t *testing.T) {
 
 func TestComputeFillsHistogram(t *testing.T) {
 	results := []runner.Result{
-		{Duration: 10 * time.Millisecond, StatusCode: 200},
-		{Duration: 20 * time.Millisecond, StatusCode: 200},
-		{Duration: 5 * time.Millisecond, Err: context.DeadlineExceeded},
+		resp(200, ms(10)),
+		resp(200, ms(20)),
+		failed(context.DeadlineExceeded, ms(5)),
 	}
 
 	s := Compute(results, time.Second)
@@ -168,8 +178,8 @@ func TestComputeFillsHistogram(t *testing.T) {
 	for _, b := range s.Histogram {
 		total += b.Count
 	}
-	if total != s.Success {
-		t.Errorf("в гистограмме %d замеров, успешных запросов %d", total, s.Success)
+	if total != s.Responses() {
+		t.Errorf("в гистограмме %d замеров, полученных ответов %d", total, s.Responses())
 	}
 }
 
@@ -220,6 +230,88 @@ func TestComputeTrace(t *testing.T) {
 		s := Compute(results, time.Second)
 		if s.Trace.TLS.Count != 0 || s.Trace.TLS.P99 != 0 {
 			t.Errorf("TLS = %+v, ожидалась пустая фаза: по HTTP рукопожатия нет", s.Trace.TLS)
+		}
+	})
+}
+
+// Три исхода — единственное место, где отчёт может выглядеть рабочим и врать,
+// поэтому проверки собраны вместе.
+func TestComputeOutcomes(t *testing.T) {
+	t.Run("2xx или нет — по границам кода", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			code   int
+			wantOK bool
+		}{
+			{"200", 200, true},
+			{"204", 204, true},
+			{"299 — верхняя граница", 299, true},
+			{"301 — редирект не проходим, значит не успех", 301, false},
+			{"400", 400, false},
+			{"503", 503, false},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := Compute([]runner.Result{resp(tt.code, ms(1))}, time.Second)
+
+				if gotOK := s.OK == 1; gotOK != tt.wantOK {
+					t.Errorf("код %d: OK=%d NonOK=%d, ожидалось ok=%v", tt.code, s.OK, s.NonOK, tt.wantOK)
+				}
+			})
+		}
+	})
+
+	// Сервис, отдающий одни 429, не должен отчитываться как успешный:
+	// ровно этот случай выглядел рабочим и врал.
+	t.Run("поток 429 — ни одного успеха", func(t *testing.T) {
+		results := make([]runner.Result, 100)
+		for i := range results {
+			results[i] = resp(429, ms(2))
+		}
+
+		s := Compute(results, time.Second)
+
+		if s.OK != 0 || s.NonOK != 100 {
+			t.Errorf("OK=%d NonOK=%d, ожидалось 0 и 100", s.OK, s.NonOK)
+		}
+		if s.SuccessRate() != 0 {
+			t.Errorf("SuccessRate = %v, ожидался 0", s.SuccessRate())
+		}
+		// RPS — пропускная способность, и 100 отказов в секунду это правда
+		if s.RPS != 100 {
+			t.Errorf("RPS = %v, ожидалось 100: отказ тоже обслуженный запрос", s.RPS)
+		}
+		// Латентность отказов осмысленна: показывает, как быстро сервис отшивает
+		if s.Latency.P50 != ms(2) {
+			t.Errorf("p50 = %v, ожидалось 2ms", s.Latency.P50)
+		}
+	})
+
+	// Пустой прогон не должен делить на ноль и не должен отчитаться о 100%.
+	t.Run("пустой прогон", func(t *testing.T) {
+		s := Compute(nil, time.Second)
+
+		if s.SuccessRate() != 0 {
+			t.Errorf("SuccessRate = %v, ожидался 0", s.SuccessRate())
+		}
+		if s.Responses() != 0 {
+			t.Errorf("Responses = %d, ожидался 0", s.Responses())
+		}
+	})
+
+	// Таймаут — не то же самое, что отказ сервера: ответа не было вовсе.
+	t.Run("таймаут не смешивается с не-2xx", func(t *testing.T) {
+		s := Compute([]runner.Result{
+			resp(503, ms(2)),
+			failed(context.DeadlineExceeded, ms(10000)),
+		}, time.Second)
+
+		if s.NonOK != 1 || s.Failed != 1 {
+			t.Errorf("NonOK=%d Failed=%d, ожидалось по единице", s.NonOK, s.Failed)
+		}
+		if s.Latency.Max != ms(2) {
+			t.Errorf("max = %v: таймаут просочился в перцентили и утопил их", s.Latency.Max)
 		}
 	})
 }

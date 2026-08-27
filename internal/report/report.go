@@ -83,9 +83,9 @@ func Text(w io.Writer, s stats.Summary, opt Options) {
 
 	writeTotals(w, s, p)
 
-	// Без единого успешного запроса печатать нечего: перцентили, гистограмма
-	// и фазы соединения считаются по успешным.
-	if s.Success > 0 {
+	// Порог — полученные ответы, а не 2xx: у прогона из одних 503 латентность
+	// осмысленна и показывает, как быстро сервис отказывает.
+	if s.Responses() > 0 {
 		writeLatency(w, s, opt, p)
 
 		if s.Trace != nil {
@@ -101,18 +101,33 @@ func Text(w io.Writer, s stats.Summary, opt Options) {
 	writeErrors(w, s, p)
 }
 
+// Ширина колонки подписей. Раньше отступы были вбиты пробелами в сами
+// подписи, и правка любой из них требовала пересчитать остальные руками.
+const totalsLabel = 14
+
 func writeTotals(w io.Writer, s stats.Summary, p palette) {
-	failed := strconv.Itoa(s.Failed)
-	if s.Failed > 0 {
-		failed = p.red(failed)
+	row := func(label, value string) {
+		fmt.Fprintf(w, "%s %s\n", p.dim(fmt.Sprintf("%-*s", totalsLabel, label)), value)
 	}
 
-	fmt.Fprintf(w, "%s %d\n", p.dim("Всего:     "), s.Total)
-	fmt.Fprintf(w, "%s %s\n", p.dim("Успешно:   "), p.green(strconv.Itoa(s.Success)))
-	fmt.Fprintf(w, "%s %s\n", p.dim("Ошибок:    "), failed)
-	fmt.Fprintf(w, "%s %v\n", p.dim("Время:     "), s.Elapsed.Round(time.Millisecond))
-	fmt.Fprintf(w, "%s %s\n", p.dim("RPS:       "), p.bold(fmt.Sprintf("%.1f", s.RPS)))
-	fmt.Fprintf(w, "%s %.2f МБ/с\n", p.dim("Throughput:"), s.Throughput)
+	// Доля 2xx стоит вплотную к числу намеренно: «Успешно: 12500» на прогоне,
+	// где сервис отдавал одни 429, читается как хорошая новость.
+	row("Всего:", strconv.Itoa(s.Total))
+	row("Успешно (2xx):", p.green(fmt.Sprintf("%d (%.1f%%)", s.OK, s.SuccessRate()*100)))
+	row("Не-2xx:", highlightNonZero(s.NonOK, p.yellow))
+	row("Без ответа:", highlightNonZero(s.Failed, p.red))
+	row("Время:", s.Elapsed.Round(time.Millisecond).String())
+	row("RPS (ответов):", p.bold(fmt.Sprintf("%.1f", s.RPS)))
+	row("Throughput:", fmt.Sprintf("%.2f МБ/с", s.Throughput))
+}
+
+// highlightNonZero красит счётчик, только если он ненулевой: подсвеченный
+// ноль приучает не обращать внимания на подсветку.
+func highlightNonZero(n int, color func(string) string) string {
+	if n == 0 {
+		return strconv.Itoa(n)
+	}
+	return color(strconv.Itoa(n))
 }
 
 func writeLatency(w io.Writer, s stats.Summary, opt Options, p palette) {

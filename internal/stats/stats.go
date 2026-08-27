@@ -33,12 +33,19 @@ type Latencies struct {
 }
 
 type Summary struct {
-	Total   int
-	Success int
-	Failed  int
+	// Три исхода, а не два. 429 и таймаут — разные события: первый означает,
+	// что сервер работает и отказывает, второй — что ответа не было вовсе.
+	// Слепить их вместе значит либо отчитаться об успехе там, где сервис
+	// отдавал одни отказы, либо утопить перцентили в значении таймаута.
+	Total  int // всего запросов
+	OK     int // ответ 2xx
+	NonOK  int // ответ получен, но не 2xx
+	Failed int // ответа не было: таймаут, обрыв, отказ в соединении
 
 	Elapsed time.Duration
-	RPS     float64
+	// RPS — полученных ответов в секунду, то есть пропускная способность.
+	// Не «успешных в секунду»: 500-ка это тоже обслуженный запрос.
+	RPS float64
 
 	// Latency — время самих запросов, Corrected — оно же плюс отставание
 	// старта от расписания. В closed-loop они совпадают; в open-loop расходятся
@@ -61,6 +68,22 @@ type Summary struct {
 	Errors map[ErrorKind]int
 }
 
+// Responses — сколько запросов получили ответ, любой.
+func (s Summary) Responses() int { return s.OK + s.NonOK }
+
+// SuccessRate — доля 2xx от всех запросов. Считается, а не хранится: поле
+// рядом со счётчиками рано или поздно разойдётся с ними при правке.
+func (s Summary) SuccessRate() float64 {
+	if s.Total == 0 {
+		return 0
+	}
+	return float64(s.OK) / float64(s.Total)
+}
+
+// isOK: успех — это 2xx. 3xx сюда не входит осознанно — редиректы мы не
+// проходим, и 301 означает, что запрошенного ресурса по этому адресу нет.
+func isOK(code int) bool { return code >= 200 && code < 300 }
+
 // Bucket — один столбик гистограммы: сколько замеров попало в интервал,
 // заканчивающийся на Upper.
 type Bucket struct {
@@ -82,19 +105,19 @@ func Compute(results []runner.Result, elapsed time.Duration) Summary {
 		s.MaxLag = max(s.MaxLag, r.Lag)
 
 		if r.Err != nil {
-			s.Failed++
-			s.Errors[Classify(r.Err)]++
+			s.recordError(r.Err)
 			continue
 		}
 
-		s.Success++
-		s.Codes[r.StatusCode]++
-		s.BytesRead += r.BytesRead
+		s.recordResponse(r)
 		service.add(r.Duration)
 		corrected.add(r.Lag + r.Duration)
 	}
 
-	if s.Success > 0 {
+	// Перцентили — по всем полученным ответам: 503 за 2мс это настоящая работа
+	// сервера, и прятать её нельзя. А вот таймауты сюда не попадают, иначе p99
+	// схлопнется в значение -t и деградацию станет не видно.
+	if s.Responses() > 0 {
 		s.Latency = service.latencies()
 		s.Corrected = corrected.latencies()
 		s.Histogram = histogram(service.sorted(), histogramBuckets)
@@ -103,11 +126,29 @@ func Compute(results []runner.Result, elapsed time.Duration) Summary {
 	s.Trace = computeTrace(results)
 
 	if elapsed > 0 {
-		s.RPS = float64(s.Success) / elapsed.Seconds()
+		s.RPS = float64(s.Responses()) / elapsed.Seconds()
 		s.Throughput = float64(s.BytesRead) / (1024 * 1024) / elapsed.Seconds()
 	}
 
 	return s
+}
+
+// recordError — ответа не было вовсе: таймаут, обрыв, отказ в соединении.
+func (s *Summary) recordError(err error) {
+	s.Failed++
+	s.Errors[Classify(err)]++
+}
+
+// recordResponse — сервер ответил, и это результат независимо от кода.
+func (s *Summary) recordResponse(r runner.Result) {
+	if isOK(r.StatusCode) {
+		s.OK++
+	} else {
+		s.NonOK++
+	}
+
+	s.Codes[r.StatusCode]++
+	s.BytesRead += r.BytesRead
 }
 
 // histogram раскладывает уже отсортированные замеры по n равным по ширине

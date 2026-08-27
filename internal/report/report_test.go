@@ -33,7 +33,7 @@ func renderJSON(t *testing.T, s stats.Summary, opt Options) []byte {
 
 func sample() stats.Summary {
 	return stats.Summary{
-		Total: 100, Success: 98, Failed: 2,
+		Total: 100, OK: 90, NonOK: 8, Failed: 2,
 		Elapsed: 2 * time.Second, RPS: 49,
 		Latency:   stats.Latencies{Min: millis(1), Mean: millis(5), Max: millis(90), P50: millis(4), P90: millis(9), P95: millis(30), P99: millis(80)},
 		Corrected: stats.Latencies{Min: millis(1), Mean: millis(9), Max: millis(120), P50: millis(5), P90: millis(40), P95: millis(70), P99: millis(110)},
@@ -292,5 +292,51 @@ func TestJSONOnEmptyRun(t *testing.T) {
 	}
 	if fields["histogram"] == nil {
 		t.Error("histogram должен быть [], а не null — потребителю проще итерироваться")
+	}
+}
+
+// Заголовок отчёта не должен читаться как успех, когда сервис отдавал
+// одни отказы: ровно эта строка раньше и врала.
+func TestTotalsDoNotReadAsSuccessOnAllNon2xx(t *testing.T) {
+	s := stats.Summary{
+		Total: 12500, OK: 0, NonOK: 12500,
+		Elapsed: 5 * time.Second, RPS: 2500,
+		Codes: map[int]int{429: 12500},
+	}
+
+	out := render(s, Options{Width: 100})
+
+	if !strings.Contains(out, "0 (0.0%)") {
+		t.Errorf("доли 2xx нет в шапке:\n%s", out)
+	}
+	if !strings.Contains(out, "12500") {
+		t.Error("число не-2xx не показано")
+	}
+	// «Успешно: 12500» в любом виде — это та самая ложь
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "Успешно") && strings.Contains(line, "12500") {
+			t.Errorf("строка читается как успех: %q", strings.TrimSpace(line))
+		}
+	}
+}
+
+func TestJSONReportsOutcomesSeparately(t *testing.T) {
+	var got struct {
+		Total       int     `json:"total"`
+		OK          int     `json:"ok"`
+		NonOK       int     `json:"non_2xx"`
+		Failed      int     `json:"failed"`
+		SuccessRate float64 `json:"success_rate"`
+	}
+
+	if err := json.Unmarshal(renderJSON(t, sample(), Options{}), &got); err != nil {
+		t.Fatal(err)
+	}
+
+	if got.Total != 100 || got.OK != 90 || got.NonOK != 8 || got.Failed != 2 {
+		t.Errorf("исходы: %+v", got)
+	}
+	if got.SuccessRate != 0.9 {
+		t.Errorf("success_rate = %v, ожидалось 0.9", got.SuccessRate)
 	}
 }

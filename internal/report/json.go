@@ -45,11 +45,13 @@ type jsonTrace struct {
 }
 
 type jsonSummary struct {
-	Total     int     `json:"total"`
-	Success   int     `json:"success"`
-	Failed    int     `json:"failed"`
-	ElapsedMs float64 `json:"elapsed_ms"`
-	RPS       float64 `json:"rps"`
+	Total       int     `json:"total"`
+	OK          int     `json:"ok"`
+	NonOK       int     `json:"non_2xx"`
+	Failed      int     `json:"failed"`
+	SuccessRate float64 `json:"success_rate"`
+	ElapsedMs   float64 `json:"elapsed_ms"`
+	RPS         float64 `json:"rps"`
 
 	BytesRead     int64   `json:"bytes_read"`
 	ThroughputMBs float64 `json:"throughput_mb_s"`
@@ -100,8 +102,10 @@ func phase(ph stats.PhaseStats) jsonPhase {
 func JSON(w io.Writer, s stats.Summary, opt Options) error {
 	out := jsonSummary{
 		Total:         s.Total,
-		Success:       s.Success,
+		OK:            s.OK,
+		NonOK:         s.NonOK,
 		Failed:        s.Failed,
+		SuccessRate:   s.SuccessRate(),
 		ElapsedMs:     ms(s.Elapsed),
 		RPS:           s.RPS,
 		BytesRead:     s.BytesRead,
