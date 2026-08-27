@@ -1,5 +1,7 @@
 # loadgen
 
+[![CI](https://github.com/Baklachok/loadgen/actions/workflows/ci.yml/badge.svg)](https://github.com/Baklachok/loadgen/actions/workflows/ci.yml)
+
 Нагрузочный тестер HTTP на Go. В отличие от большинства самописных — не врёт про хвост латенси.
 
 ![демо](assets/demo.gif)
@@ -88,7 +90,7 @@ internal/report/  представление: текст с цветами и г
 ```bash
 make build    # bin/loadgen с версией из git describe
 make test     # go test -race ./...
-make lint     # golangci-lint + go vet + проверка gofmt
+make lint     # golangci-lint: govet, staticcheck, gosec, bodyclose, gofmt
 make cross    # dist/: linux, darwin, windows — amd64 и arm64
 ```
 

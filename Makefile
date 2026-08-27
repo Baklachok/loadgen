@@ -26,9 +26,6 @@ lint:
 		echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"; \
 		exit 1; }
 	golangci-lint run
-	go vet ./...
-	@out=$$($(GOFMT) -l ./cmd ./internal); \
-	if [ -n "$$out" ]; then echo "не отформатировано:"; echo "$$out"; exit 1; fi
 
 fmt:
 	$(GOFMT) -w ./cmd ./internal

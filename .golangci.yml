@@ -1,0 +1,30 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose # незакрытые resp.Body — для HTTP-инструмента самое то
+    - gosec
+    - misspell
+
+  settings:
+    errcheck:
+      # Ошибка записи в stdout для CLI не значит ничего: протаскивать её через
+      # каждый Fprintf в report — двадцать лишних проверок ради нулевой пользы.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
+  exclusions:
+    presets:
+      - std-error-handling # в том числе defer resp.Body.Close()
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
