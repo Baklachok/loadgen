@@ -25,6 +25,11 @@ const (
 	ErrOtherKind ErrorKind = "other"
 )
 
+type Latencies struct {
+	Min, Mean, Max     time.Duration
+	P50, P90, P95, P99 time.Duration
+}
+
 type Summary struct {
 	Total   int
 	Success int
@@ -33,21 +38,19 @@ type Summary struct {
 	Elapsed time.Duration
 	RPS     float64
 
-	Min, Mean, Max     time.Duration
-	P50, P90, P95, P99 time.Duration
+	// Latency — время самих запросов, Corrected — оно же плюс отставание
+	// старта от расписания. В closed-loop они совпадают; в open-loop расходятся
+	// ровно настолько, насколько генератор не успевал за собственным планом,
+	// и именно Corrected показывает, что видел бы клиент, шлющий по часам.
+	Latency   Latencies
+	Corrected Latencies
+	MaxLag    time.Duration
 
 	BytesRead  int64
 	Throughput float64 // МБ/с
 
 	Codes  map[int]int
 	Errors map[ErrorKind]int
-}
-
-type Result struct {
-	Duration   time.Duration
-	StatusCode int
-	Err        error
-	BytesRead  int64
 }
 
 func Compute(results []runner.Result, elapsed time.Duration) Summary {
@@ -59,9 +62,13 @@ func Compute(results []runner.Result, elapsed time.Duration) Summary {
 	}
 
 	durations := make([]time.Duration, 0, len(results))
-	var total time.Duration
+	corrected := make([]time.Duration, 0, len(results))
+	var total, totalCorrected time.Duration
 
 	for _, r := range results {
+		if r.Lag > s.MaxLag {
+			s.MaxLag = r.Lag
+		}
 		if r.Err != nil {
 			s.Failed++
 			s.Errors[Classify(r.Err)]++
@@ -71,18 +78,14 @@ func Compute(results []runner.Result, elapsed time.Duration) Summary {
 		s.Codes[r.StatusCode]++
 		s.BytesRead += r.BytesRead
 		durations = append(durations, r.Duration)
+		corrected = append(corrected, r.Lag+r.Duration)
 		total += r.Duration
+		totalCorrected += r.Lag + r.Duration
 	}
 
 	if s.Success > 0 {
-		slices.Sort(durations)
-		s.Min = durations[0]
-		s.Max = durations[len(durations)-1]
-		s.Mean = total / time.Duration(s.Success)
-		s.P50 = Percentile(durations, 0.50)
-		s.P90 = Percentile(durations, 0.90)
-		s.P95 = Percentile(durations, 0.95)
-		s.P99 = Percentile(durations, 0.99)
+		s.Latency = summarize(durations, total)
+		s.Corrected = summarize(corrected, totalCorrected)
 	}
 
 	if elapsed > 0 {
@@ -91,6 +94,20 @@ func Compute(results []runner.Result, elapsed time.Duration) Summary {
 	}
 
 	return s
+}
+
+// summarize сортирует xs на месте. Вызывается только при len(xs) > 0.
+func summarize(xs []time.Duration, total time.Duration) Latencies {
+	slices.Sort(xs)
+	return Latencies{
+		Min:  xs[0],
+		Max:  xs[len(xs)-1],
+		Mean: total / time.Duration(len(xs)),
+		P50:  Percentile(xs, 0.50),
+		P90:  Percentile(xs, 0.90),
+		P95:  Percentile(xs, 0.95),
+		P99:  Percentile(xs, 0.99),
+	}
 }
 
 // Percentile ожидает отсортированный слайс.

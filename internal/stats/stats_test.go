@@ -65,8 +65,8 @@ func TestCompute(t *testing.T) {
 	if s.RPS != 1.5 {
 		t.Errorf("RPS = %v, want 1.5", s.RPS)
 	}
-	if s.Mean != ms(20) {
-		t.Errorf("Mean = %v, want 20ms", s.Mean)
+	if s.Latency.Mean != ms(20) {
+		t.Errorf("Mean = %v, want 20ms", s.Latency.Mean)
 	}
 	if s.Codes[200] != 2 || s.Codes[500] != 1 {
 		t.Errorf("codes = %v", s.Codes)
