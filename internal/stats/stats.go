@@ -31,6 +31,11 @@ type Summary struct {
 	// TargetRate — заданная частота open-loop, 0 в closed-loop.
 	TargetRate float64
 
+	// Late — запросы, ушедшие позже расписания больше чем на один интервал,
+	// то есть отставшие минимум на целый слот. Меньший разброс — джиттер
+	// планировщика, и считать его опозданием значит зашуметь отчёт.
+	Late int
+
 	// Latency — время самих запросов, Corrected — оно же плюс отставание
 	// старта от расписания. В closed-loop они совпадают; в open-loop расходятся
 	// ровно настолько, насколько генератор не успевал за собственным планом,
@@ -54,6 +59,22 @@ type Summary struct {
 
 // Responses — сколько запросов получили ответ, любой.
 func (s Summary) Responses() int { return s.OK + s.NonOK }
+
+// schedulePeriod — сколько времени отведено расписанием на один запрос.
+func schedulePeriod(rate float64) time.Duration {
+	if rate <= 0 {
+		return 0
+	}
+	return time.Duration(float64(time.Second) / rate)
+}
+
+// LateShare — доля запросов, ушедших с опозданием больше чем на слот.
+func (s Summary) LateShare() float64 {
+	if s.Total == 0 {
+		return 0
+	}
+	return float64(s.Late) / float64(s.Total)
+}
 
 // RateShortfall — насколько достигнутая частота ниже заданной, долей единицы.
 // Ноль означает «цель достигнута или превышена», а также closed-loop, где
@@ -90,6 +111,11 @@ func Compute(rep runner.Report) Summary {
 		Errors:     make(map[ErrorKind]int),
 	}
 
+	// Порог опоздания — один интервал расписания: при 2000 RPS это 500мкс,
+	// при 10 RPS — 100мс. Абсолютная константа тут не годится, потому что
+	// «поздно» определяется частотой, а не часами.
+	period := schedulePeriod(rep.TargetRate)
+
 	var service, corrected samples
 
 	for _, r := range rep.Results {
@@ -102,6 +128,9 @@ func Compute(rep runner.Report) Summary {
 
 		s.Total++
 		s.MaxLag = max(s.MaxLag, r.Lag)
+		if period > 0 && r.Lag > period {
+			s.Late++
+		}
 
 		if r.Err != nil {
 			s.recordError(r.Err)

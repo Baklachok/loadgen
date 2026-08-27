@@ -56,6 +56,8 @@ type jsonSummary struct {
 	RPS           float64 `json:"rps"`
 	TargetRate    float64 `json:"target_rate"`
 	RateShortfall float64 `json:"rate_shortfall"`
+	Late          int     `json:"late"`
+	LateShare     float64 `json:"late_share"`
 
 	BytesRead     int64   `json:"bytes_read"`
 	ThroughputMBs float64 `json:"throughput_mb_s"`
@@ -103,7 +105,7 @@ func phase(ph stats.PhaseStats) jsonPhase {
 	}
 }
 
-func JSON(w io.Writer, s stats.Summary, opt Options) error {
+func writeJSON(w io.Writer, s stats.Summary, opt Options) error {
 	out := jsonSummary{
 		Total:         s.Total,
 		Warmup:        s.Warmup,
@@ -116,6 +118,8 @@ func JSON(w io.Writer, s stats.Summary, opt Options) error {
 		RPS:           s.RPS,
 		TargetRate:    s.TargetRate,
 		RateShortfall: s.RateShortfall(),
+		Late:          s.Late,
+		LateShare:     s.LateShare(),
 		BytesRead:     s.BytesRead,
 		ThroughputMBs: s.Throughput,
 		Latency:       latencies(s.Latency),

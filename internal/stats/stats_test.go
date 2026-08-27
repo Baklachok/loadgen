@@ -191,12 +191,7 @@ func TestComputeOutcomes(t *testing.T) {
 	// Сервис, отдающий одни 429, не должен отчитываться как успешный:
 	// ровно этот случай выглядел рабочим и врал.
 	t.Run("поток 429 — ни одного успеха", func(t *testing.T) {
-		results := make([]runner.Result, 100)
-		for i := range results {
-			results[i] = resp(429, ms(2))
-		}
-
-		s := compute(results, time.Second)
+		s := compute(repeat(100, resp(429, ms(2))), time.Second)
 
 		if s.OK != 0 || s.NonOK != 100 {
 			t.Errorf("OK=%d NonOK=%d, ожидалось 0 и 100", s.OK, s.NonOK)
@@ -283,10 +278,7 @@ func TestComputeRates(t *testing.T) {
 		warm := resp(200, ms(80))
 		warm.Warmup = true
 
-		results := []runner.Result{warm, warm}
-		for range 100 {
-			results = append(results, resp(200, ms(5)))
-		}
+		results := append([]runner.Result{warm, warm}, repeat(100, resp(200, ms(5)))...)
 
 		// Прогон длился 2с, из них измерялись последние 0.5с
 		s := Compute(runner.Report{
@@ -325,6 +317,51 @@ func TestComputeRates(t *testing.T) {
 
 		if s.TargetRate != 500 {
 			t.Errorf("TargetRate = %v, ожидалось 500", s.TargetRate)
+		}
+	})
+
+	// Порог опоздания — интервал расписания, а не абсолютная константа:
+	// при 1000 RPS «поздно» это 1мс, при 10 RPS — 100мс.
+	t.Run("опоздания считаются по интервалу расписания", func(t *testing.T) {
+		onTime := resp(200, ms(5))
+		onTime.Lag = 300 * time.Microsecond // джиттер планировщика
+
+		late := resp(200, ms(5))
+		late.Lag = 8 * time.Millisecond
+
+		s := Compute(runner.Report{
+			Results:    []runner.Result{onTime, onTime, late, late, late},
+			Elapsed:    time.Second,
+			Window:     time.Second,
+			TargetRate: 1000, // интервал 1мс
+		})
+
+		if s.Late != 3 {
+			t.Errorf("Late = %d, ожидалось 3: опоздавшими считаются те, кто вышел позже слота", s.Late)
+		}
+		if s.LateShare() != 0.6 {
+			t.Errorf("LateShare = %v, ожидалось 0.6", s.LateShare())
+		}
+		if s.MaxLag != 8*time.Millisecond {
+			t.Errorf("MaxLag = %v, ожидалось 8ms", s.MaxLag)
+		}
+	})
+
+	t.Run("в closed-loop опозданий не бывает", func(t *testing.T) {
+		late := resp(200, ms(5))
+		late.Lag = time.Second // мусор в поле, расписания не было
+
+		s := Compute(runner.Report{
+			Results: []runner.Result{late},
+			Elapsed: time.Second,
+			Window:  time.Second,
+		})
+
+		if s.Late != 0 {
+			t.Errorf("Late = %d без заданной частоты", s.Late)
+		}
+		if s.LateShare() != 0 {
+			t.Errorf("LateShare = %v без заданной частоты", s.LateShare())
 		}
 	})
 

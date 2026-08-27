@@ -266,3 +266,41 @@ func TestCorrectedBlockOnlyInOpenLoop(t *testing.T) {
 		t.Error("open-loop: блок с поправкой пропал")
 	}
 }
+
+// Массовые опоздания старта означают, что запросы не успевали уходить,
+// — это потолок генератора, а не медленный сервис. Пока данных на такой
+// вывод нет, предупреждение обязано честно называть обе версии.
+func TestRateWarningNamesTheCauseWhenKnown(t *testing.T) {
+	t.Run("опоздания массовые — виноват генератор", func(t *testing.T) {
+		s := sample()
+		s.TargetRate, s.RPS = 2000, 500
+		s.Total, s.Late, s.MaxLag = 1000, 800, 250*time.Millisecond
+
+		out := render(s, Options{Width: 100})
+
+		if !strings.Contains(out, "не успевали уходить") {
+			t.Errorf("причина не названа, хотя 80%% опоздали:\n%s", out)
+		}
+		if !strings.Contains(out, "Опоздали:") || !strings.Contains(out, "800 (80%)") {
+			t.Errorf("счётчик опозданий не показан:\n%s", out)
+		}
+	})
+
+	t.Run("опозданий нет — обе версии остаются", func(t *testing.T) {
+		s := sample()
+		s.TargetRate, s.RPS = 2000, 500
+		s.Total, s.Late = 1000, 0
+
+		out := render(s, Options{Width: 100})
+
+		if strings.Contains(out, "не успевали уходить") {
+			t.Error("генератор назначен виноватым без единого опоздания")
+		}
+		if !strings.Contains(out, "Либо сервис") {
+			t.Errorf("нет честного перечисления причин:\n%s", out)
+		}
+		if strings.Contains(out, "Опоздали:") {
+			t.Error("напечатана строка опозданий при нулевом счётчике")
+		}
+	})
+}

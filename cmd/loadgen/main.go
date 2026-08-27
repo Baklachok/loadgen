@@ -109,8 +109,9 @@ func main() {
 		os.Exit(2)
 	}
 
-	if *output != "text" && *output != "json" {
-		fmt.Fprintf(os.Stderr, "ошибка: неизвестный формат вывода %q, доступны text и json\n", *output)
+	renderer, err := report.NewRenderer(*output)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ошибка:", err)
 		os.Exit(2)
 	}
 
@@ -157,9 +158,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "\nостановка, собираю результаты...")
 	}()
 
-	// в json-режиме на stdout должен уйти только JSON, иначе jq подавится
-	if *output == "text" {
-		report.Header(os.Stdout, cfg, opt)
+	// Печатать ли шапку, решает сам рендерер: в машинных форматах её нет.
+	if err := renderer.Header(os.Stdout, cfg, opt); err != nil {
+		fmt.Fprintln(os.Stderr, "ошибка вывода:", err)
+		os.Exit(1)
 	}
 
 	// Время меряет сам runner: он один знает, когда кончился прогрев.
@@ -169,14 +171,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	s := stats.Compute(rep)
-
-	if *output == "json" {
-		if err := report.JSON(os.Stdout, s, opt); err != nil {
-			fmt.Fprintln(os.Stderr, "ошибка вывода:", err)
-			os.Exit(1)
-		}
-		return
+	if err := renderer.Render(os.Stdout, stats.Compute(rep), opt); err != nil {
+		fmt.Fprintln(os.Stderr, "ошибка вывода:", err)
+		os.Exit(1)
 	}
-	report.Text(os.Stdout, s, opt)
 }

@@ -22,7 +22,7 @@ type Options struct {
 }
 
 // Header печатается до прогона, чтобы было видно, что вообще запустили.
-func Header(w io.Writer, cfg runner.Config, opt Options) {
+func writeHeader(w io.Writer, cfg runner.Config, opt Options) {
 	p := palette(opt.Color)
 
 	mode := fmt.Sprintf("closed-loop, %d потоков", cfg.Concurrency)
@@ -38,7 +38,7 @@ func Header(w io.Writer, cfg runner.Config, opt Options) {
 	fmt.Fprintf(w, "Запуск %d запросов к %s %s\n\n", cfg.Requests, target, p.dim("("+mode+")"))
 }
 
-func Text(w io.Writer, s stats.Summary, opt Options) {
+func writeReport(w io.Writer, s stats.Summary, opt Options) {
 	p := palette(opt.Color)
 
 	writeTotals(w, s, p)
@@ -90,11 +90,21 @@ func writeTotals(w io.Writer, s stats.Summary, p palette) {
 		row("Измерялось:", s.Window.Round(time.Millisecond).String())
 	}
 	row("RPS (ответов):", rateValue(s, p))
+
+	// Опоздания печатаем только когда они были: в closed-loop расписания нет,
+	// а в уложившемся open-loop эта строка была бы вечным нулём.
+	if s.Late > 0 {
+		row("Опоздали:", p.yellow(fmt.Sprintf("%d (%.0f%%), макс. на %v",
+			s.Late, s.LateShare()*100, s.MaxLag.Round(time.Millisecond))))
+	}
 	row("Throughput:", fmt.Sprintf("%.2f МБ/с", s.Throughput))
 }
 
 // Расхождение больше пары процентов — это уже не шум планировщика.
 const rateShortfallLimit = 0.02
+
+// Доля опоздавших, начиная с которой причина недобора перестаёт быть загадкой.
+const lateShareHint = 0.10
 
 // rateValue ставит достигнутую частоту рядом с заданной. Порознь, как было
 // раньше — цель в шапке, факт в сводке, — их никто не сопоставляет.
@@ -124,12 +134,25 @@ func writeRateWarning(w io.Writer, s stats.Summary, p palette) {
 	}
 
 	fmt.Fprintf(w, "\n%s\n", p.red("Заданная частота не удержана."))
-	for _, line := range []string{
+	for _, line := range rateWarningCause(s) {
+		fmt.Fprintf(w, "  %s\n", p.dim(line))
+	}
+	fmt.Fprintf(w, "  %s\n", p.dim("До выяснения остальные цифры прогона интерпретировать нельзя."))
+}
+
+// rateWarningCause сужает подозрение там, где данных достаточно. Массовые
+// опоздания старта означают, что запросы не успевали уходить, — упёрлись в
+// собственный потолок параллельности, а не в сервис.
+func rateWarningCause(s stats.Summary) []string {
+	if s.LateShare() >= lateShareHint {
+		return []string{
+			fmt.Sprintf("Запросы не успевали уходить: %.0f%% стартовали с опозданием.", s.LateShare()*100),
+			"Похоже на потолок параллельности генератора — поднимите -c.",
+		}
+	}
+	return []string{
 		"Либо сервис не принимает такой поток, либо не тянет сам генератор:",
 		"проверьте загрузку CPU клиента и ошибки сокетов, поднимите -c.",
-		"До выяснения остальные цифры прогона интерпретировать нельзя.",
-	} {
-		fmt.Fprintf(w, "  %s\n", p.dim(line))
 	}
 }
 

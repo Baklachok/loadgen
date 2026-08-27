@@ -179,3 +179,19 @@ func TestJSONReportsRateShortfall(t *testing.T) {
 		t.Errorf("rate_shortfall = %v, ожидалось 0.6", got.RateShortfall)
 	}
 }
+
+func TestJSONReportsLateDispatches(t *testing.T) {
+	s := sample()
+	s.Total, s.Late = 1000, 250
+
+	var got struct {
+		Late      int     `json:"late"`
+		LateShare float64 `json:"late_share"`
+	}
+	if err := json.Unmarshal(renderJSON(t, s, Options{}), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Late != 250 || got.LateShare != 0.25 {
+		t.Errorf("late=%d late_share=%v, ожидалось 250 и 0.25", got.Late, got.LateShare)
+	}
+}

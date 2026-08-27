@@ -16,7 +16,9 @@ func millis(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 
 func render(s stats.Summary, opt Options) string {
 	var buf bytes.Buffer
-	Text(&buf, s, opt)
+	if err := (textRenderer{}).Render(&buf, s, opt); err != nil {
+		panic(err) // bytes.Buffer не умеет отказывать
+	}
 	return buf.String()
 }
 
@@ -24,7 +26,7 @@ func renderJSON(t *testing.T, s stats.Summary, opt Options) []byte {
 	t.Helper()
 
 	var buf bytes.Buffer
-	if err := JSON(&buf, s, opt); err != nil {
+	if err := (jsonRenderer{}).Render(&buf, s, opt); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()

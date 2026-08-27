@@ -34,3 +34,13 @@ func tenMs() []time.Duration {
 func compute(results []runner.Result, elapsed time.Duration) Summary {
 	return Compute(runner.Report{Results: results, Elapsed: elapsed, Window: elapsed})
 }
+
+// repeat — «сделать N одинаковых замеров». Встречалось дважды и двумя
+// разными способами: через make с индексом и через append в цикле.
+func repeat(n int, r runner.Result) []runner.Result {
+	out := make([]runner.Result, n)
+	for i := range out {
+		out[i] = r
+	}
+	return out
+}
