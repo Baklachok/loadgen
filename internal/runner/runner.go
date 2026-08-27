@@ -109,6 +109,10 @@ type Report struct {
 
 	Elapsed time.Duration // весь прогон, от старта до последнего результата
 	Window  time.Duration // от старта первого измеряемого запроса до конца
+
+	// TargetRate — заданная частота open-loop, 0 в closed-loop. Едет вместе
+	// с замерами, чтобы отчёт мог сопоставить обещанное с полученным.
+	TargetRate float64
 }
 
 func Run(ctx context.Context, cfg Config) (Report, error) {
@@ -155,9 +159,10 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	end := time.Now()
 
 	return Report{
-		Results: all,
-		Elapsed: end.Sub(e.runStart),
-		Window:  e.measuredWindow(end),
+		Results:    all,
+		Elapsed:    end.Sub(e.runStart),
+		Window:     e.measuredWindow(end),
+		TargetRate: cfg.Rate,
 	}, nil
 }
 

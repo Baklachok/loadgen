@@ -45,15 +45,17 @@ type jsonTrace struct {
 }
 
 type jsonSummary struct {
-	Total       int     `json:"total"`
-	Warmup      int     `json:"warmup_discarded"`
-	OK          int     `json:"ok"`
-	NonOK       int     `json:"non_2xx"`
-	Failed      int     `json:"failed"`
-	SuccessRate float64 `json:"success_rate"`
-	ElapsedMs   float64 `json:"elapsed_ms"`
-	WindowMs    float64 `json:"window_ms"`
-	RPS         float64 `json:"rps"`
+	Total         int     `json:"total"`
+	Warmup        int     `json:"warmup_discarded"`
+	OK            int     `json:"ok"`
+	NonOK         int     `json:"non_2xx"`
+	Failed        int     `json:"failed"`
+	SuccessRate   float64 `json:"success_rate"`
+	ElapsedMs     float64 `json:"elapsed_ms"`
+	WindowMs      float64 `json:"window_ms"`
+	RPS           float64 `json:"rps"`
+	TargetRate    float64 `json:"target_rate"`
+	RateShortfall float64 `json:"rate_shortfall"`
 
 	BytesRead     int64   `json:"bytes_read"`
 	ThroughputMBs float64 `json:"throughput_mb_s"`
@@ -112,6 +114,8 @@ func JSON(w io.Writer, s stats.Summary, opt Options) error {
 		ElapsedMs:     ms(s.Elapsed),
 		WindowMs:      ms(s.Window),
 		RPS:           s.RPS,
+		TargetRate:    s.TargetRate,
+		RateShortfall: s.RateShortfall(),
 		BytesRead:     s.BytesRead,
 		ThroughputMBs: s.Throughput,
 		Latency:       latencies(s.Latency),

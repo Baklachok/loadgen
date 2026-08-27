@@ -28,6 +28,9 @@ type Summary struct {
 	// Не «успешных в секунду»: 500-ка это тоже обслуженный запрос.
 	RPS float64
 
+	// TargetRate — заданная частота open-loop, 0 в closed-loop.
+	TargetRate float64
+
 	// Latency — время самих запросов, Corrected — оно же плюс отставание
 	// старта от расписания. В closed-loop они совпадают; в open-loop расходятся
 	// ровно настолько, насколько генератор не успевал за собственным планом,
@@ -52,6 +55,19 @@ type Summary struct {
 // Responses — сколько запросов получили ответ, любой.
 func (s Summary) Responses() int { return s.OK + s.NonOK }
 
+// RateShortfall — насколько достигнутая частота ниже заданной, долей единицы.
+// Ноль означает «цель достигнута или превышена», а также closed-loop, где
+// цели не было вовсе.
+//
+// Расхождение здесь — не косметика: пока не выяснено, кто не тянет, сервис
+// или сам генератор, остальные цифры прогона интерпретировать нельзя.
+func (s Summary) RateShortfall() float64 {
+	if s.TargetRate <= 0 || s.RPS >= s.TargetRate {
+		return 0
+	}
+	return (s.TargetRate - s.RPS) / s.TargetRate
+}
+
 // SuccessRate — доля 2xx от всех запросов. Считается, а не хранится: поле
 // рядом со счётчиками рано или поздно разойдётся с ними при правке.
 func (s Summary) SuccessRate() float64 {
@@ -67,10 +83,11 @@ func isOK(code int) bool { return code >= 200 && code < 300 }
 
 func Compute(rep runner.Report) Summary {
 	s := Summary{
-		Elapsed: rep.Elapsed,
-		Window:  rep.Window,
-		Codes:   make(map[int]int),
-		Errors:  make(map[ErrorKind]int),
+		Elapsed:    rep.Elapsed,
+		Window:     rep.Window,
+		TargetRate: rep.TargetRate,
+		Codes:      make(map[int]int),
+		Errors:     make(map[ErrorKind]int),
 	}
 
 	var service, corrected samples

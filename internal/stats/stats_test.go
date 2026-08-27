@@ -2,6 +2,7 @@ package stats
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -273,39 +274,82 @@ func TestComputeExcludesWarmup(t *testing.T) {
 	}
 }
 
-// Числитель RPS считается без прогрева — значит и знаменатель должен быть
-// без него, иначе цифра занижается ровно на долю прогрева.
-func TestRPSUsesMeasurementWindow(t *testing.T) {
-	warm := resp(200, ms(80))
-	warm.Warmup = true
+// Частота и её знаменатель: место, где цифра легче всего расходится
+// с реальностью, оставаясь правдоподобной.
+func TestComputeRates(t *testing.T) {
+	// Числитель RPS считается без прогрева — значит и знаменатель должен быть
+	// без него, иначе цифра занижается ровно на долю прогрева.
+	t.Run("RPS считается по окну измерения", func(t *testing.T) {
+		warm := resp(200, ms(80))
+		warm.Warmup = true
 
-	results := []runner.Result{warm, warm}
-	for range 100 {
-		results = append(results, resp(200, ms(5)))
-	}
+		results := []runner.Result{warm, warm}
+		for range 100 {
+			results = append(results, resp(200, ms(5)))
+		}
 
-	// Прогон длился 2с, из них измерялись последние 0.5с
-	s := Compute(runner.Report{
-		Results: results,
-		Elapsed: 2 * time.Second,
-		Window:  500 * time.Millisecond,
+		// Прогон длился 2с, из них измерялись последние 0.5с
+		s := Compute(runner.Report{
+			Results: results,
+			Elapsed: 2 * time.Second,
+			Window:  500 * time.Millisecond,
+		})
+
+		if s.Total != 100 || s.Warmup != 2 {
+			t.Fatalf("Total=%d Warmup=%d, ожидалось 100 и 2", s.Total, s.Warmup)
+		}
+		if s.RPS != 200 {
+			t.Errorf("RPS = %v, ожидалось 200 (100 запросов / 0.5с). По всему прогону вышло бы 50", s.RPS)
+		}
 	})
 
-	if s.Total != 100 || s.Warmup != 2 {
-		t.Fatalf("Total=%d Warmup=%d, ожидалось 100 и 2", s.Total, s.Warmup)
-	}
-	if s.RPS != 200 {
-		t.Errorf("RPS = %v, ожидалось 200 (100 запросов / 0.5с). По всему прогону вышло бы 50", s.RPS)
-	}
-}
+	t.Run("пустое окно — нулевой RPS", func(t *testing.T) {
+		warm := resp(200, ms(5))
+		warm.Warmup = true
 
-func TestRPSZeroWhenNothingMeasured(t *testing.T) {
-	warm := resp(200, ms(5))
-	warm.Warmup = true
+		s := Compute(runner.Report{Results: []runner.Result{warm}, Elapsed: time.Second})
 
-	s := Compute(runner.Report{Results: []runner.Result{warm}, Elapsed: time.Second})
+		if s.RPS != 0 {
+			t.Errorf("RPS = %v при пустом окне, ожидался 0", s.RPS)
+		}
+	})
 
-	if s.RPS != 0 {
-		t.Errorf("RPS = %v при пустом окне, ожидался 0", s.RPS)
-	}
+	// Заданная частота должна доезжать до отчёта, иначе сопоставлять не с чем.
+	t.Run("заданная частота доезжает до отчёта", func(t *testing.T) {
+		s := Compute(runner.Report{
+			Results:    []runner.Result{resp(200, ms(1))},
+			Elapsed:    time.Second,
+			Window:     time.Second,
+			TargetRate: 500,
+		})
+
+		if s.TargetRate != 500 {
+			t.Errorf("TargetRate = %v, ожидалось 500", s.TargetRate)
+		}
+	})
+
+	t.Run("недобор частоты", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			target float64
+			rps    float64
+			want   float64
+		}{
+			{"closed-loop — цели не было", 0, 1500, 0},
+			{"цель достигнута", 1000, 1000, 0},
+			{"цель превышена — не недобор", 1000, 1050, 0},
+			{"недобор вдвое", 1000, 500, 0.5},
+			{"недобор на процент", 1000, 990, 0.01},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := Summary{TargetRate: tt.target, RPS: tt.rps}
+
+				if got := s.RateShortfall(); math.Abs(got-tt.want) > 1e-9 {
+					t.Errorf("RateShortfall() = %v, ожидалось %v", got, tt.want)
+				}
+			})
+		}
+	})
 }

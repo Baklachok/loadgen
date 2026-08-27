@@ -42,6 +42,7 @@ func Text(w io.Writer, s stats.Summary, opt Options) {
 	p := palette(opt.Color)
 
 	writeTotals(w, s, p)
+	writeRateWarning(w, s, p)
 
 	// Порог — полученные ответы, а не 2xx: у прогона из одних 503 латентность
 	// осмысленна и показывает, как быстро сервис отказывает.
@@ -51,10 +52,7 @@ func Text(w io.Writer, s stats.Summary, opt Options) {
 		if s.Trace != nil {
 			writeTrace(w, s.Trace, p)
 		}
-		if len(s.Histogram) > 0 {
-			fmt.Fprintf(w, "\n%s\n", p.bold("Распределение"))
-			writeHistogram(w, s.Histogram, p, opt.Width)
-		}
+		writeHistogram(w, s.Histogram, p, opt.Width)
 	}
 
 	writeCodes(w, s, p)
@@ -91,8 +89,48 @@ func writeTotals(w io.Writer, s stats.Summary, p palette) {
 	if s.Warmup > 0 && s.Window > 0 {
 		row("Измерялось:", s.Window.Round(time.Millisecond).String())
 	}
-	row("RPS (ответов):", p.bold(fmt.Sprintf("%.1f", s.RPS)))
+	row("RPS (ответов):", rateValue(s, p))
 	row("Throughput:", fmt.Sprintf("%.2f МБ/с", s.Throughput))
+}
+
+// Расхождение больше пары процентов — это уже не шум планировщика.
+const rateShortfallLimit = 0.02
+
+// rateValue ставит достигнутую частоту рядом с заданной. Порознь, как было
+// раньше — цель в шапке, факт в сводке, — их никто не сопоставляет.
+func rateValue(s stats.Summary, p palette) string {
+	got := p.bold(fmt.Sprintf("%.1f", s.RPS))
+	if s.TargetRate <= 0 {
+		return got
+	}
+
+	value := fmt.Sprintf("%s из %.0f заданных", got, s.TargetRate)
+
+	// Недобор в пределах шума планировщика не подсвечиваем: подсвеченная
+	// норма приучает не смотреть на подсветку.
+	if shortfall := s.RateShortfall(); shortfall >= rateShortfallLimit {
+		value += " " + p.red(fmt.Sprintf("(−%.0f%%)", shortfall*100))
+	}
+	return value
+}
+
+// writeRateWarning — не косметика: пока не выяснено, кто не удержал частоту,
+// сервис или сам генератор, остальные цифры прогона интерпретировать нельзя.
+// Поэтому предупреждение идёт в отчёт, а не в stderr, — рядом с числами,
+// достоверность которых оно ставит под вопрос.
+func writeRateWarning(w io.Writer, s stats.Summary, p palette) {
+	if s.RateShortfall() < rateShortfallLimit {
+		return
+	}
+
+	fmt.Fprintf(w, "\n%s\n", p.red("Заданная частота не удержана."))
+	for _, line := range []string{
+		"Либо сервис не принимает такой поток, либо не тянет сам генератор:",
+		"проверьте загрузку CPU клиента и ошибки сокетов, поднимите -c.",
+		"До выяснения остальные цифры прогона интерпретировать нельзя.",
+	} {
+		fmt.Fprintf(w, "  %s\n", p.dim(line))
+	}
 }
 
 // highlightNonZero красит счётчик, только если он ненулевой: подсвеченный
@@ -135,6 +173,11 @@ func writeLatencies(w io.Writer, l stats.Latencies, p palette) {
 // ширину строки. Подписи считаются заранее, иначе бар не влезет и строка
 // переносится, разваливая картинку.
 func writeHistogram(w io.Writer, buckets []stats.Bucket, p palette, width int) {
+	if len(buckets) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n%s\n", p.bold("Распределение"))
+
 	labels := make([]string, len(buckets))
 	counts := make([]string, len(buckets))
 	labelW, countW, maxCount := 0, 0, 0

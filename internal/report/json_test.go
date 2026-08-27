@@ -159,3 +159,23 @@ func TestJSONReportsMeasurementWindow(t *testing.T) {
 		t.Errorf("elapsed_ms=%v window_ms=%v, ожидалось 6000 и 1500", got.ElapsedMs, got.WindowMs)
 	}
 }
+
+func TestJSONReportsRateShortfall(t *testing.T) {
+	s := sample()
+	s.TargetRate, s.RPS = 1000, 400
+
+	var got struct {
+		TargetRate    float64 `json:"target_rate"`
+		RateShortfall float64 `json:"rate_shortfall"`
+	}
+	if err := json.Unmarshal(renderJSON(t, s, Options{}), &got); err != nil {
+		t.Fatal(err)
+	}
+
+	if got.TargetRate != 1000 {
+		t.Errorf("target_rate = %v, ожидалось 1000", got.TargetRate)
+	}
+	if got.RateShortfall != 0.6 {
+		t.Errorf("rate_shortfall = %v, ожидалось 0.6", got.RateShortfall)
+	}
+}
