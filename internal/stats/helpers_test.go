@@ -28,3 +28,9 @@ func tenMs() []time.Duration {
 	}
 	return d
 }
+
+// compute избавляет тесты от сборки runner.Report руками там, где окно
+// измерения совпадает с длительностью прогона, — то есть везде без прогрева.
+func compute(results []runner.Result, elapsed time.Duration) Summary {
+	return Compute(runner.Report{Results: results, Elapsed: elapsed, Window: elapsed})
+}

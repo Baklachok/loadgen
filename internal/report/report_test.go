@@ -193,3 +193,29 @@ func TestWarmupLineOnlyWhenUsed(t *testing.T) {
 		t.Errorf("прогрев не показан в шапке:\n%s", out)
 	}
 }
+
+// Строка «Измерялось» появляется, только когда окно отличается от прогона:
+// без прогрева это был бы дубль строки выше.
+func TestMeasurementWindowShownOnlyWhenItDiffers(t *testing.T) {
+	const marker = "Измерялось:"
+
+	// Без прогрева окно всё равно на волосок короче прогона — строки быть
+	// не должно именно поэтому, а не из-за точного равенства.
+	same := sample()
+	same.Elapsed, same.Window = 2*time.Second, 2*time.Second-317*time.Microsecond
+	if strings.Contains(render(same, Options{Width: 100}), marker) {
+		t.Error("окно напечатано, хотя прогрева не было")
+	}
+
+	shortened := sample()
+	shortened.Warmup = 50
+	shortened.Elapsed, shortened.Window = 6*time.Second, time.Second
+	out := render(shortened, Options{Width: 100})
+
+	if !strings.Contains(out, marker) {
+		t.Errorf("окно не показано, хотя короче прогона:\n%s", out)
+	}
+	if !strings.Contains(out, "1s") || !strings.Contains(out, "6s") {
+		t.Errorf("в шапке нет обоих значений:\n%s", out)
+	}
+}

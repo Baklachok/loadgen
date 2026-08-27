@@ -10,7 +10,7 @@ import (
 func TestComputeTrace(t *testing.T) {
 
 	t.Run("без трассировки — nil", func(t *testing.T) {
-		s := Compute([]runner.Result{{Duration: ms(1), StatusCode: 200}}, time.Second)
+		s := compute([]runner.Result{{Duration: ms(1), StatusCode: 200}}, time.Second)
 		if s.Trace != nil {
 			t.Errorf("Trace = %+v, ожидался nil: отчёт должен отличать «не измеряли» от «фаз не было»", s.Trace)
 		}
@@ -26,7 +26,7 @@ func TestComputeTrace(t *testing.T) {
 			{Duration: ms(24), StatusCode: 200, Trace: &runner.Trace{TTFB: ms(22), Reused: true}},
 		}
 
-		s := Compute(results, time.Second)
+		s := compute(results, time.Second)
 		if s.Trace == nil {
 			t.Fatal("Trace = nil")
 		}
@@ -51,7 +51,7 @@ func TestComputeTrace(t *testing.T) {
 			{Duration: ms(5), StatusCode: 200, Trace: &runner.Trace{TTFB: ms(4), Reused: true}},
 		}
 
-		s := Compute(results, time.Second)
+		s := compute(results, time.Second)
 		if s.Trace.TLS.Count != 0 || s.Trace.TLS.P99 != 0 {
 			t.Errorf("TLS = %+v, ожидалась пустая фаза: по HTTP рукопожатия нет", s.Trace.TLS)
 		}
@@ -71,7 +71,7 @@ func TestComputeTraceExcludesWarmup(t *testing.T) {
 	measured := resp(200, ms(5))
 	measured.Trace = &runner.Trace{TTFB: ms(4), Reused: true}
 
-	s := Compute([]runner.Result{warm, measured}, time.Second)
+	s := compute([]runner.Result{warm, measured}, time.Second)
 
 	if s.Trace.Traced != 1 {
 		t.Errorf("Traced = %d, ожидался 1: прогрев не измеряется", s.Trace.Traced)

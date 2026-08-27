@@ -101,14 +101,24 @@ func (c Config) offset(i int) time.Duration {
 	return time.Duration(float64(i) * float64(time.Second) / c.Rate)
 }
 
-func Run(ctx context.Context, cfg Config) ([]Result, error) {
+// Report — что дал прогон. Окно измерения отдаётся вместе с замерами
+// намеренно: делить измеренные запросы на полную длительность прогона —
+// значит занижать RPS ровно на долю прогрева.
+type Report struct {
+	Results []Result
+
+	Elapsed time.Duration // весь прогон, от старта до последнего результата
+	Window  time.Duration // от старта первого измеряемого запроса до конца
+}
+
+func Run(ctx context.Context, cfg Config) (Report, error) {
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("некорректная конфигурация: %w", err)
+		return Report{}, fmt.Errorf("некорректная конфигурация: %w", err)
 	}
 
 	factory, err := newRequestFactory(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось собрать запрос: %w", err)
+		return Report{}, fmt.Errorf("не удалось собрать запрос: %w", err)
 	}
 
 	// runCtx гасит выдачу новых задач; ctx живёт до Ctrl+C, поэтому запросы,
@@ -141,7 +151,14 @@ func Run(ctx context.Context, cfg Config) ([]Result, error) {
 		e.closedLoop(ctx, runCtx)
 	}()
 
-	return collect(results, cfg.Requests), nil
+	all := collect(results, cfg.Requests)
+	end := time.Now()
+
+	return Report{
+		Results: all,
+		Elapsed: end.Sub(e.runStart),
+		Window:  e.measuredWindow(end),
+	}, nil
 }
 
 // collect преаллоцирует слайс под ожидаемое число запросов. В режиме -z оно

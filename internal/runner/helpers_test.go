@@ -99,12 +99,19 @@ func durationConfig(srv *httptest.Server, d time.Duration) Config {
 // прогона, а разбор конфига проверяется отдельно.
 func mustRun(t *testing.T, ctx context.Context, cfg Config) []Result {
 	t.Helper()
+	return mustRunReport(t, ctx, cfg).Results
+}
 
-	res, err := Run(ctx, cfg)
+// mustRunReport нужен тестам, которым важны не только замеры, но и окно,
+// за которое они собраны.
+func mustRunReport(t *testing.T, ctx context.Context, cfg Config) Report {
+	t.Helper()
+
+	rep, err := Run(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return res
+	return rep
 }
 
 // assertNoErrors — ни один запрос не должен был провалиться.

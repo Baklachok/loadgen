@@ -47,7 +47,7 @@ func TestCompute(t *testing.T) {
 		failed(context.DeadlineExceeded, ms(5)),
 	}
 
-	s := Compute(results, 2*time.Second)
+	s := compute(results, 2*time.Second)
 
 	if s.Total != 4 || s.OK != 2 || s.NonOK != 1 || s.Failed != 1 {
 		t.Errorf("counts: total=%d ok=%d non2xx=%d failed=%d", s.Total, s.OK, s.NonOK, s.Failed)
@@ -150,7 +150,7 @@ func TestComputeFillsHistogram(t *testing.T) {
 		failed(context.DeadlineExceeded, ms(5)),
 	}
 
-	s := Compute(results, time.Second)
+	s := compute(results, time.Second)
 
 	total := 0
 	for _, b := range s.Histogram {
@@ -178,7 +178,7 @@ func TestComputeOutcomes(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				s := Compute([]runner.Result{resp(tt.code, ms(1))}, time.Second)
+				s := compute([]runner.Result{resp(tt.code, ms(1))}, time.Second)
 
 				if gotOK := s.OK == 1; gotOK != tt.wantOK {
 					t.Errorf("код %d: OK=%d NonOK=%d, ожидалось ok=%v", tt.code, s.OK, s.NonOK, tt.wantOK)
@@ -195,7 +195,7 @@ func TestComputeOutcomes(t *testing.T) {
 			results[i] = resp(429, ms(2))
 		}
 
-		s := Compute(results, time.Second)
+		s := compute(results, time.Second)
 
 		if s.OK != 0 || s.NonOK != 100 {
 			t.Errorf("OK=%d NonOK=%d, ожидалось 0 и 100", s.OK, s.NonOK)
@@ -215,7 +215,7 @@ func TestComputeOutcomes(t *testing.T) {
 
 	// Пустой прогон не должен делить на ноль и не должен отчитаться о 100%.
 	t.Run("пустой прогон", func(t *testing.T) {
-		s := Compute(nil, time.Second)
+		s := compute(nil, time.Second)
 
 		if s.SuccessRate() != 0 {
 			t.Errorf("SuccessRate = %v, ожидался 0", s.SuccessRate())
@@ -227,7 +227,7 @@ func TestComputeOutcomes(t *testing.T) {
 
 	// Таймаут — не то же самое, что отказ сервера: ответа не было вовсе.
 	t.Run("таймаут не смешивается с не-2xx", func(t *testing.T) {
-		s := Compute([]runner.Result{
+		s := compute([]runner.Result{
 			resp(503, ms(2)),
 			failed(context.DeadlineExceeded, ms(10000)),
 		}, time.Second)
@@ -248,7 +248,7 @@ func TestComputeExcludesWarmup(t *testing.T) {
 	warm := resp(200, ms(500)) // медленный: платил за рукопожатие
 	warm.Warmup = true
 
-	s := Compute([]runner.Result{
+	s := compute([]runner.Result{
 		warm, warm,
 		resp(200, ms(10)),
 		resp(200, ms(20)),
@@ -270,5 +270,42 @@ func TestComputeExcludesWarmup(t *testing.T) {
 	}
 	if s.RPS != 3 {
 		t.Errorf("RPS = %v, ожидалось 3: прогрев не считается пропускной способностью", s.RPS)
+	}
+}
+
+// Числитель RPS считается без прогрева — значит и знаменатель должен быть
+// без него, иначе цифра занижается ровно на долю прогрева.
+func TestRPSUsesMeasurementWindow(t *testing.T) {
+	warm := resp(200, ms(80))
+	warm.Warmup = true
+
+	results := []runner.Result{warm, warm}
+	for range 100 {
+		results = append(results, resp(200, ms(5)))
+	}
+
+	// Прогон длился 2с, из них измерялись последние 0.5с
+	s := Compute(runner.Report{
+		Results: results,
+		Elapsed: 2 * time.Second,
+		Window:  500 * time.Millisecond,
+	})
+
+	if s.Total != 100 || s.Warmup != 2 {
+		t.Fatalf("Total=%d Warmup=%d, ожидалось 100 и 2", s.Total, s.Warmup)
+	}
+	if s.RPS != 200 {
+		t.Errorf("RPS = %v, ожидалось 200 (100 запросов / 0.5с). По всему прогону вышло бы 50", s.RPS)
+	}
+}
+
+func TestRPSZeroWhenNothingMeasured(t *testing.T) {
+	warm := resp(200, ms(5))
+	warm.Warmup = true
+
+	s := Compute(runner.Report{Results: []runner.Result{warm}, Elapsed: time.Second})
+
+	if s.RPS != 0 {
+		t.Errorf("RPS = %v при пустом окне, ожидался 0", s.RPS)
 	}
 }

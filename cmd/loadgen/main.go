@@ -162,14 +162,14 @@ func main() {
 		report.Header(os.Stdout, cfg, opt)
 	}
 
-	start := time.Now()
-	results, err := runner.Run(ctx, cfg)
+	// Время меряет сам runner: он один знает, когда кончился прогрев.
+	rep, err := runner.Run(ctx, cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ошибка:", err)
 		os.Exit(1)
 	}
 
-	s := stats.Compute(results, time.Since(start))
+	s := stats.Compute(rep)
 
 	if *output == "json" {
 		if err := report.JSON(os.Stdout, s, opt); err != nil {

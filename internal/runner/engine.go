@@ -22,6 +22,20 @@ type engine struct {
 
 	runStart time.Time    // отсчёт прогрева по времени
 	started  atomic.Int64 // отсчёт прогрева по количеству
+
+	// measuredFrom — момент старта первого запроса, попавшего в измерения,
+	// в наносекундах Unix. Ноль означает, что мерить ещё не начинали.
+	measuredFrom atomic.Int64
+}
+
+// measuredWindow — сколько времени длилось измерение. Без прогрева совпадает
+// с длительностью прогона; с прогревом короче ровно на него.
+func (e *engine) measuredWindow(end time.Time) time.Duration {
+	from := e.measuredFrom.Load()
+	if from == 0 {
+		return 0
+	}
+	return end.Sub(time.Unix(0, from))
 }
 
 // isWarmup решает судьбу запроса в момент его старта, а не завершения:
@@ -35,6 +49,12 @@ func (e *engine) isWarmup(at time.Time) bool {
 		return e.started.Add(1) <= int64(e.cfg.WarmupRequests)
 	}
 	return false
+}
+
+// markMeasured запоминает старт первого измеряемого запроса. CAS, а не
+// проверка с присваиванием: запросы стартуют из разных горутин.
+func (e *engine) markMeasured(at time.Time) {
+	e.measuredFrom.CompareAndSwap(0, at.UnixNano())
 }
 
 // do выполняет один запрос и замеряет его целиком: от отправки до дочитанного тела.
@@ -75,7 +95,12 @@ func (e *engine) do(ctx context.Context) Result {
 // emit шлёт запрос и кладёт результат в канал. Отменённый запрос — это Ctrl+C,
 // а не отказ сервера, и в статистике ему не место.
 func (e *engine) emit(ctx context.Context, lag time.Duration) {
-	warmup := e.isWarmup(time.Now())
+	now := time.Now()
+
+	warmup := e.isWarmup(now)
+	if !warmup {
+		e.markMeasured(now)
+	}
 
 	res := e.do(ctx)
 	res.Lag = lag

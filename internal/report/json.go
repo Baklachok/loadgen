@@ -52,6 +52,7 @@ type jsonSummary struct {
 	Failed      int     `json:"failed"`
 	SuccessRate float64 `json:"success_rate"`
 	ElapsedMs   float64 `json:"elapsed_ms"`
+	WindowMs    float64 `json:"window_ms"`
 	RPS         float64 `json:"rps"`
 
 	BytesRead     int64   `json:"bytes_read"`
@@ -109,6 +110,7 @@ func JSON(w io.Writer, s stats.Summary, opt Options) error {
 		Failed:        s.Failed,
 		SuccessRate:   s.SuccessRate(),
 		ElapsedMs:     ms(s.Elapsed),
+		WindowMs:      ms(s.Window),
 		RPS:           s.RPS,
 		BytesRead:     s.BytesRead,
 		ThroughputMBs: s.Throughput,

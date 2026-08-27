@@ -114,3 +114,41 @@ func TestWarmupValidation(t *testing.T) {
 		})
 	}
 }
+
+// Окно измерения — единственный честный знаменатель для RPS: числитель
+// считается без прогрева, значит и знаменатель обязан быть без него.
+func TestWarmupShortensMeasurementWindow(t *testing.T) {
+	srv := sleepServer(t, 5*time.Millisecond)
+
+	cfg := durationConfig(srv, 600*time.Millisecond)
+	cfg.Concurrency = 4
+	cfg.WarmupDuration = 200 * time.Millisecond
+
+	rep := mustRunReport(t, context.Background(), cfg)
+
+	if rep.Elapsed < 500*time.Millisecond {
+		t.Fatalf("Elapsed = %v, прогон должен был длиться ~600мс", rep.Elapsed)
+	}
+	// Окно короче прогона примерно на прогрев; допуск широкий,
+	// потому что точные границы зависят от планировщика
+	if rep.Window >= rep.Elapsed {
+		t.Errorf("Window = %v при Elapsed = %v: прогрев не вычтен", rep.Window, rep.Elapsed)
+	}
+	if gap := rep.Elapsed - rep.Window; gap < 150*time.Millisecond || gap > 300*time.Millisecond {
+		t.Errorf("прогон длиннее окна на %v, ожидалось около 200мс", gap)
+	}
+}
+
+func TestWindowEqualsElapsedWithoutWarmup(t *testing.T) {
+	srv := sleepServer(t, time.Millisecond)
+
+	rep := mustRunReport(t, context.Background(), requestsConfig(srv, 20))
+
+	// Первый запрос стартует не мгновенно, поэтому окно чуть короче прогона
+	if gap := rep.Elapsed - rep.Window; gap > 50*time.Millisecond {
+		t.Errorf("окно короче прогона на %v без всякого прогрева", gap)
+	}
+	if rep.Window <= 0 {
+		t.Error("окно измерения нулевое")
+	}
+}

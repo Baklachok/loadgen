@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Baklachok/loadgen/internal/stats"
 )
@@ -139,5 +140,22 @@ func TestJSONReportsWarmup(t *testing.T) {
 	}
 	if got.Warmup != 42 {
 		t.Errorf("warmup_discarded = %d, ожидалось 42", got.Warmup)
+	}
+}
+
+func TestJSONReportsMeasurementWindow(t *testing.T) {
+	s := sample()
+	s.Elapsed, s.Window = 6*time.Second, 1500*time.Millisecond
+
+	var got struct {
+		ElapsedMs float64 `json:"elapsed_ms"`
+		WindowMs  float64 `json:"window_ms"`
+	}
+	if err := json.Unmarshal(renderJSON(t, s, Options{}), &got); err != nil {
+		t.Fatal(err)
+	}
+
+	if got.ElapsedMs != 6000 || got.WindowMs != 1500 {
+		t.Errorf("elapsed_ms=%v window_ms=%v, ожидалось 6000 и 1500", got.ElapsedMs, got.WindowMs)
 	}
 }
