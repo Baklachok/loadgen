@@ -64,6 +64,7 @@ loadgen -m POST -d '{"a":1}' -H 'Content-Type: application/json' http://localhos
 | `-H` | — | заголовок `'Key: Value'`, можно несколько раз |
 | `-t` | 10s | таймаут запроса |
 | `-o` | text | формат вывода: `text` или `json` |
+| `-trace` | false | разбить latency по фазам: DNS, TCP, TLS, TTFB |
 | `-insecure` | false | не проверять TLS-сертификат |
 | `-disable-keepalive` | false | новое соединение на каждый запрос |
 | `-http2` | false | разрешить HTTP/2 |

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"sync"
 	"time"
 )
@@ -21,6 +22,14 @@ type engine struct {
 
 // do выполняет один запрос и замеряет его целиком: от отправки до дочитанного тела.
 func (e *engine) do(ctx context.Context) Result {
+	// Трассировку вешаем на контекст до сборки запроса: factory всё равно
+	// клонирует его с этим контекстом, лишнего копирования не возникает.
+	var t *tracer
+	if e.cfg.Trace {
+		t = &tracer{}
+		ctx = httptrace.WithClientTrace(ctx, t.hooks())
+	}
+
 	start := time.Now()
 
 	req, err := e.factory.request(ctx)
@@ -30,15 +39,20 @@ func (e *engine) do(ctx context.Context) Result {
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return Result{Duration: time.Since(start), Err: err}
+		return Result{Duration: time.Since(start), Err: err, Trace: t.snapshot()}
 	}
 	defer resp.Body.Close()
 
 	n, err := io.Copy(io.Discard, resp.Body)
 	if err != nil {
-		return Result{Duration: time.Since(start), Err: err, BytesRead: n}
+		return Result{Duration: time.Since(start), Err: err, BytesRead: n, Trace: t.snapshot()}
 	}
-	return Result{Duration: time.Since(start), StatusCode: resp.StatusCode, BytesRead: n}
+	return Result{
+		Duration:   time.Since(start),
+		StatusCode: resp.StatusCode,
+		BytesRead:  n,
+		Trace:      t.snapshot(),
+	}
 }
 
 // emit шлёт запрос и кладёт результат в канал. Отменённый запрос — это Ctrl+C,

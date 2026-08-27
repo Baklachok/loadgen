@@ -8,8 +8,11 @@ import (
 	"github.com/Baklachok/loadgen/internal/runner"
 )
 
+// ms — короткая запись для длительностей: тесты здесь про соотношения
+// значений, а не про time.Duration.
+func ms(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+
 func TestPercentile(t *testing.T) {
-	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 
 	tests := []struct {
 		name   string
@@ -48,7 +51,6 @@ func tenMs() []time.Duration {
 }
 
 func TestCompute(t *testing.T) {
-	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 
 	results := []runner.Result{
 		{Duration: ms(10), StatusCode: 200, BytesRead: 100},
@@ -77,7 +79,6 @@ func TestCompute(t *testing.T) {
 }
 
 func TestHistogram(t *testing.T) {
-	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 
 	t.Run("пустой вход", func(t *testing.T) {
 		if got := histogram(nil, 10); got != nil {
@@ -170,4 +171,55 @@ func TestComputeFillsHistogram(t *testing.T) {
 	if total != s.Success {
 		t.Errorf("в гистограмме %d замеров, успешных запросов %d", total, s.Success)
 	}
+}
+
+func TestComputeTrace(t *testing.T) {
+
+	t.Run("без трассировки — nil", func(t *testing.T) {
+		s := Compute([]runner.Result{{Duration: ms(1), StatusCode: 200}}, time.Second)
+		if s.Trace != nil {
+			t.Errorf("Trace = %+v, ожидался nil: отчёт должен отличать «не измеряли» от «фаз не было»", s.Trace)
+		}
+	})
+
+	t.Run("нулевые фазы не попадают в перцентили", func(t *testing.T) {
+		// Первый запрос соединялся, три следующих взяли соединение из пула:
+		// у них DNS/Connect/TLS равны нулю, потому что их не было.
+		results := []runner.Result{
+			{Duration: ms(50), StatusCode: 200, Trace: &runner.Trace{DNS: ms(4), Connect: ms(6), TLS: ms(10), TTFB: ms(40)}},
+			{Duration: ms(20), StatusCode: 200, Trace: &runner.Trace{TTFB: ms(18), Reused: true}},
+			{Duration: ms(22), StatusCode: 200, Trace: &runner.Trace{TTFB: ms(20), Reused: true}},
+			{Duration: ms(24), StatusCode: 200, Trace: &runner.Trace{TTFB: ms(22), Reused: true}},
+		}
+
+		s := Compute(results, time.Second)
+		if s.Trace == nil {
+			t.Fatal("Trace = nil")
+		}
+
+		if s.Trace.Traced != 4 || s.Trace.Reused != 3 {
+			t.Errorf("traced=%d reused=%d, ожидалось 4 и 3", s.Trace.Traced, s.Trace.Reused)
+		}
+		if s.Trace.Connect.Count != 1 {
+			t.Errorf("Connect.Count = %d, ожидался 1: три запроса не соединялись вовсе", s.Trace.Connect.Count)
+		}
+		// Если бы нули учитывались, среднее было бы 1.5мс вместо 6мс
+		if s.Trace.Connect.Mean != ms(6) {
+			t.Errorf("Connect.Mean = %v, ожидалось 6ms", s.Trace.Connect.Mean)
+		}
+		if s.Trace.TTFB.Count != 4 {
+			t.Errorf("TTFB.Count = %d, ожидалось 4: первый байт получили все", s.Trace.TTFB.Count)
+		}
+	})
+
+	t.Run("фаза без единого замера остаётся пустой", func(t *testing.T) {
+		results := []runner.Result{
+			{Duration: ms(5), StatusCode: 200, Trace: &runner.Trace{TTFB: ms(4), Reused: true}},
+		}
+
+		s := Compute(results, time.Second)
+		if s.Trace.TLS.Count != 0 || s.Trace.TLS.P99 != 0 {
+			t.Errorf("TLS = %+v, ожидалась пустая фаза: по HTTP рукопожатия нет", s.Trace.TLS)
+		}
+	})
 }

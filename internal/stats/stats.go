@@ -54,6 +54,9 @@ type Summary struct {
 	// Histogram — распределение Latency по равным бакетам, для картинки в отчёте
 	Histogram []Bucket
 
+	// Trace — разбивка по фазам соединения; nil, если трассировку не включали
+	Trace *TraceSummary
+
 	Codes  map[int]int
 	Errors map[ErrorKind]int
 }
@@ -73,33 +76,31 @@ func Compute(results []runner.Result, elapsed time.Duration) Summary {
 		Errors:  make(map[ErrorKind]int),
 	}
 
-	durations := make([]time.Duration, 0, len(results))
-	corrected := make([]time.Duration, 0, len(results))
-	var total, totalCorrected time.Duration
+	var service, corrected samples
 
 	for _, r := range results {
-		if r.Lag > s.MaxLag {
-			s.MaxLag = r.Lag
-		}
+		s.MaxLag = max(s.MaxLag, r.Lag)
+
 		if r.Err != nil {
 			s.Failed++
 			s.Errors[Classify(r.Err)]++
 			continue
 		}
+
 		s.Success++
 		s.Codes[r.StatusCode]++
 		s.BytesRead += r.BytesRead
-		durations = append(durations, r.Duration)
-		corrected = append(corrected, r.Lag+r.Duration)
-		total += r.Duration
-		totalCorrected += r.Lag + r.Duration
+		service.add(r.Duration)
+		corrected.add(r.Lag + r.Duration)
 	}
 
 	if s.Success > 0 {
-		s.Latency = summarize(durations, total)
-		s.Corrected = summarize(corrected, totalCorrected)
-		s.Histogram = histogram(durations, histogramBuckets)
+		s.Latency = service.latencies()
+		s.Corrected = corrected.latencies()
+		s.Histogram = histogram(service.sorted(), histogramBuckets)
 	}
+
+	s.Trace = computeTrace(results)
 
 	if elapsed > 0 {
 		s.RPS = float64(s.Success) / elapsed.Seconds()
@@ -139,17 +140,40 @@ func histogram(sorted []time.Duration, n int) []Bucket {
 	return buckets
 }
 
-// summarize сортирует xs на месте. Вызывается только при len(xs) > 0.
-func summarize(xs []time.Duration, total time.Duration) Latencies {
-	slices.Sort(xs)
+// samples копит замеры для перцентилей. Сумму держим рядом, чтобы среднее
+// не считать вторым проходом по миллионам значений.
+type samples struct {
+	values []time.Duration
+	total  time.Duration
+}
+
+func (s *samples) add(d time.Duration) {
+	s.values = append(s.values, d)
+	s.total += d
+}
+
+// sorted сортирует на месте: упорядоченный слайс нужен и перцентилям,
+// и гистограмме, а копировать его ради этого незачем. Идемпотентна.
+func (s *samples) sorted() []time.Duration {
+	slices.Sort(s.values)
+	return s.values
+}
+
+// latencies на пустом наборе возвращает нули — «замеров не было».
+func (s *samples) latencies() Latencies {
+	sorted := s.sorted()
+	if len(sorted) == 0 {
+		return Latencies{}
+	}
+
 	return Latencies{
-		Min:  xs[0],
-		Max:  xs[len(xs)-1],
-		Mean: total / time.Duration(len(xs)),
-		P50:  Percentile(xs, 0.50),
-		P90:  Percentile(xs, 0.90),
-		P95:  Percentile(xs, 0.95),
-		P99:  Percentile(xs, 0.99),
+		Min:  sorted[0],
+		Max:  sorted[len(sorted)-1],
+		Mean: s.total / time.Duration(len(sorted)),
+		P50:  Percentile(sorted, 0.50),
+		P90:  Percentile(sorted, 0.90),
+		P95:  Percentile(sorted, 0.95),
+		P99:  Percentile(sorted, 0.99),
 	}
 }
 

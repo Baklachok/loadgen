@@ -11,18 +11,37 @@ import (
 	"github.com/Baklachok/loadgen/internal/stats"
 )
 
+func millis(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+
+// render отдаёт весь текстовый отчёт строкой: тестам интересна не запись
+// в io.Writer, а то, что в ней оказалось.
+func render(s stats.Summary, opt Options) string {
+	var buf bytes.Buffer
+	Text(&buf, s, opt)
+	return buf.String()
+}
+
+func renderJSON(t *testing.T, s stats.Summary, opt Options) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := JSON(&buf, s, opt); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
 func sample() stats.Summary {
-	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 	return stats.Summary{
 		Total: 100, Success: 98, Failed: 2,
 		Elapsed: 2 * time.Second, RPS: 49,
-		Latency:   stats.Latencies{Min: ms(1), Mean: ms(5), Max: ms(90), P50: ms(4), P90: ms(9), P95: ms(30), P99: ms(80)},
-		Corrected: stats.Latencies{Min: ms(1), Mean: ms(9), Max: ms(120), P50: ms(5), P90: ms(40), P95: ms(70), P99: ms(110)},
-		MaxLag:    ms(30),
+		Latency:   stats.Latencies{Min: millis(1), Mean: millis(5), Max: millis(90), P50: millis(4), P90: millis(9), P95: millis(30), P99: millis(80)},
+		Corrected: stats.Latencies{Min: millis(1), Mean: millis(9), Max: millis(120), P50: millis(5), P90: millis(40), P95: millis(70), P99: millis(110)},
+		MaxLag:    millis(30),
 		Histogram: []stats.Bucket{
-			{Upper: ms(10), Count: 80},
-			{Upper: ms(20), Count: 3},
-			{Upper: ms(120), Count: 15},
+			{Upper: millis(10), Count: 80},
+			{Upper: millis(20), Count: 3},
+			{Upper: millis(120), Count: 15},
 		},
 		BytesRead: 4096, Throughput: 0.002,
 		Codes:  map[int]int{200: 90, 404: 5, 503: 3},
@@ -30,20 +49,28 @@ func sample() stats.Summary {
 	}
 }
 
-func TestTextNoEscapesWhenColorOff(t *testing.T) {
-	var buf bytes.Buffer
-	Text(&buf, sample(), Options{Color: false, Width: 80})
+// traced — тот же прогон, но с -trace. Соединялись двое из тысячи,
+// рукопожатия TLS не было вовсе: обычная картина по HTTP с keep-alive.
+func traced() stats.Summary {
+	s := sample()
+	s.Trace = &stats.TraceSummary{
+		Traced:  1000,
+		Reused:  998,
+		DNS:     stats.PhaseStats{Count: 2, Latencies: stats.Latencies{P50: millis(1), P99: millis(3), Max: millis(3)}},
+		Connect: stats.PhaseStats{Count: 2, Latencies: stats.Latencies{P50: millis(1), P99: millis(2), Max: millis(2)}},
+		TTFB:    stats.PhaseStats{Count: 1000, Latencies: stats.Latencies{P50: millis(6), P99: millis(400), Max: millis(450)}},
+	}
+	return s
+}
 
-	if strings.ContainsRune(buf.String(), '\x1b') {
+func TestTextNoEscapesWhenColorOff(t *testing.T) {
+	if strings.ContainsRune(render(sample(), Options{Color: false, Width: 80}), '\x1b') {
 		t.Error("в выводе есть ANSI-коды при Color=false — они уедут в пайп")
 	}
 }
 
 func TestTextHasEscapesWhenColorOn(t *testing.T) {
-	var buf bytes.Buffer
-	Text(&buf, sample(), Options{Color: true, Width: 80})
-
-	if !strings.ContainsRune(buf.String(), '\x1b') {
+	if !strings.ContainsRune(render(sample(), Options{Color: true, Width: 80}), '\x1b') {
 		t.Error("Color=true, но раскраски нет")
 	}
 }
@@ -51,10 +78,7 @@ func TestTextHasEscapesWhenColorOn(t *testing.T) {
 // Бар должен укладываться в ширину терминала: перенос строки разваливает картинку.
 func TestHistogramFitsWidth(t *testing.T) {
 	for _, width := range []int{40, 60, 80, 120, 200} {
-		var buf bytes.Buffer
-		Text(&buf, sample(), Options{Color: false, Width: width})
-
-		for _, line := range strings.Split(buf.String(), "\n") {
+		for _, line := range strings.Split(render(sample(), Options{Width: width}), "\n") {
 			if !strings.Contains(line, "█") {
 				continue
 			}
@@ -69,10 +93,8 @@ func TestHistogramFitsWidth(t *testing.T) {
 // схлопывается в огрызок независимо от размера окна.
 func TestHistogramScalesToWidth(t *testing.T) {
 	longest := func(width int) int {
-		var buf bytes.Buffer
-		Text(&buf, sample(), Options{Color: false, Width: width})
 		best := 0
-		for _, line := range strings.Split(buf.String(), "\n") {
+		for _, line := range strings.Split(render(sample(), Options{Width: width}), "\n") {
 			best = max(best, strings.Count(line, "█"))
 		}
 		return best
@@ -85,34 +107,103 @@ func TestHistogramScalesToWidth(t *testing.T) {
 }
 
 func TestHistogramSurvivesTinyWidth(t *testing.T) {
-	var buf bytes.Buffer
-	Text(&buf, sample(), Options{Color: false, Width: 1}) // не должно паниковать
-	if buf.Len() == 0 {
+	if render(sample(), Options{Width: 1}) == "" { // не должно паниковать
 		t.Error("пустой вывод")
+	}
+}
+
+// При длинном хвосте маленький бакет округляется в ноль столбиков и становится
+// неотличим от пустого — а это разные вещи.
+func TestHistogramShowsSmallBuckets(t *testing.T) {
+	s := sample()
+	s.Histogram = []stats.Bucket{
+		{Upper: millis(1), Count: 10000},
+		{Upper: millis(2), Count: 0},
+		{Upper: millis(3), Count: 7},
+	}
+
+	var bars []int
+	for _, line := range strings.Split(render(s, Options{Width: 80}), "\n") {
+		if strings.Contains(line, "[") && strings.Contains(line, "ms") {
+			bars = append(bars, strings.Count(line, "█"))
+		}
+	}
+
+	if len(bars) != 3 {
+		t.Fatalf("строк гистограммы %d, want 3", len(bars))
+	}
+	if bars[1] != 0 {
+		t.Errorf("пустой бакет нарисован %d столбиками, want 0", bars[1])
+	}
+	if bars[2] == 0 {
+		t.Error("бакет на 7 замеров нарисован пустым — не отличить от нуля")
 	}
 }
 
 func TestCorrectedBlockOnlyInOpenLoop(t *testing.T) {
 	const marker = "поправкой на расписание"
 
-	var closed, open bytes.Buffer
-	Text(&closed, sample(), Options{Width: 80, OpenLoop: false})
-	Text(&open, sample(), Options{Width: 80, OpenLoop: true})
-
-	if strings.Contains(closed.String(), marker) {
+	if strings.Contains(render(sample(), Options{Width: 80}), marker) {
 		t.Error("closed-loop: блок с поправкой не должен печататься — расписания не было")
 	}
-	if !strings.Contains(open.String(), marker) {
+	if !strings.Contains(render(sample(), Options{Width: 80, OpenLoop: true}), marker) {
 		t.Error("open-loop: блок с поправкой пропал")
 	}
 }
 
-func TestJSONShape(t *testing.T) {
-	var buf bytes.Buffer
-	if err := JSON(&buf, sample(), Options{OpenLoop: true}); err != nil {
-		t.Fatal(err)
-	}
+func TestTraceBlockOnlyWhenMeasured(t *testing.T) {
+	const marker = "Фазы соединения"
 
+	if strings.Contains(render(sample(), Options{Width: 80}), marker) {
+		t.Error("блок фаз печатается без -trace")
+	}
+	if !strings.Contains(render(traced(), Options{Width: 80}), marker) {
+		t.Error("блок фаз пропал при включённой трассировке")
+	}
+}
+
+// Пустая фаза должна быть видна как прочерк: ноль замеров и «0ms» —
+// разные утверждения, и путать их нельзя.
+func TestTraceShowsEmptyPhaseAsDash(t *testing.T) {
+	for _, line := range strings.Split(render(traced(), Options{Width: 80}), "\n") {
+		if !strings.Contains(line, "TLS handshake") {
+			continue
+		}
+		if !strings.Contains(line, "—") {
+			t.Errorf("фаза без замеров показана как %q", strings.TrimSpace(line))
+		}
+		return
+	}
+	t.Error("строки TLS handshake нет вовсе")
+}
+
+// Колонка «замеров» — главное в этом блоке: без неё p99 по двум замерам
+// выглядит так же солидно, как p99 по тысяче.
+func TestTraceShowsSampleCounts(t *testing.T) {
+	out := render(traced(), Options{Width: 100})
+
+	for _, want := range []string{"замеров", "998 из 1000"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("в блоке фаз нет %q", want)
+		}
+	}
+}
+
+// «0 из 200 взяли соединение из пула — фазы им не понадобились» — бессмыслица.
+func TestTraceNoteWhenNothingReused(t *testing.T) {
+	s := traced()
+	s.Trace.Reused = 0
+
+	out := render(s, Options{Width: 100})
+	if strings.Contains(out, "0 из") {
+		t.Error("напечатано «0 из N взяли соединение из пула»")
+	}
+	if !strings.Contains(out, "ни один") {
+		t.Errorf("нет внятной формулировки для случая без переиспользования:\n%s", out)
+	}
+}
+
+func TestJSONShape(t *testing.T) {
 	var got struct {
 		Total   int `json:"total"`
 		Latency struct {
@@ -129,8 +220,10 @@ func TestJSONShape(t *testing.T) {
 			Count   int     `json:"count"`
 		} `json:"histogram"`
 	}
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
-		t.Fatalf("невалидный JSON: %v\n%s", err, buf.String())
+
+	raw := renderJSON(t, sample(), Options{OpenLoop: true})
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("невалидный JSON: %v\n%s", err, raw)
 	}
 
 	if got.Total != 100 {
@@ -157,55 +250,47 @@ func TestJSONShape(t *testing.T) {
 }
 
 func TestJSONOmitsCorrectedInClosedLoop(t *testing.T) {
-	var buf bytes.Buffer
-	if err := JSON(&buf, sample(), Options{OpenLoop: false}); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(buf.String(), "corrected") || strings.Contains(buf.String(), "max_lag_ms") {
+	out := string(renderJSON(t, sample(), Options{OpenLoop: false}))
+
+	if strings.Contains(out, "corrected") || strings.Contains(out, "max_lag_ms") {
 		t.Error("в closed-loop полей поправки быть не должно: иначе потребитель решит, что расписание было")
 	}
 }
 
-func TestJSONOnEmptyRun(t *testing.T) {
-	var buf bytes.Buffer
-	if err := JSON(&buf, stats.Summary{Codes: map[int]int{}, Errors: map[stats.ErrorKind]int{}}, Options{}); err != nil {
-		t.Fatal(err)
+func TestJSONOmitsTraceWhenNotMeasured(t *testing.T) {
+	if out := string(renderJSON(t, sample(), Options{})); strings.Contains(out, `"trace"`) {
+		t.Error("без -trace секции trace в JSON быть не должно")
 	}
-	var any map[string]any
-	if err := json.Unmarshal(buf.Bytes(), &any); err != nil {
-		t.Fatalf("невалидный JSON на пустом прогоне: %v", err)
+
+	var got struct {
+		Trace *struct {
+			Traced  int `json:"traced"`
+			Reused  int `json:"reused"`
+			Connect struct {
+				Count int `json:"count"`
+			} `json:"connect"`
+		} `json:"trace"`
 	}
-	if any["histogram"] == nil {
-		t.Error("histogram должен быть [], а не null — потребителю проще итерироваться")
+	if err := json.Unmarshal(renderJSON(t, traced(), Options{}), &got); err != nil {
+		t.Fatalf("невалидный JSON: %v", err)
+	}
+
+	if got.Trace == nil || got.Trace.Traced != 1000 || got.Trace.Reused != 998 {
+		t.Errorf("trace = %+v", got.Trace)
+	}
+	if got.Trace.Connect.Count != 2 {
+		t.Errorf("connect.count = %d, ожидалось 2", got.Trace.Connect.Count)
 	}
 }
 
-// При длинном хвосте маленький бакет округляется в ноль столбиков и становится
-// неотличим от пустого — а это разные вещи.
-func TestHistogramShowsSmallBuckets(t *testing.T) {
-	s := sample()
-	s.Histogram = []stats.Bucket{
-		{Upper: time.Millisecond, Count: 10000},
-		{Upper: 2 * time.Millisecond, Count: 0},
-		{Upper: 3 * time.Millisecond, Count: 7},
-	}
+func TestJSONOnEmptyRun(t *testing.T) {
+	empty := stats.Summary{Codes: map[int]int{}, Errors: map[stats.ErrorKind]int{}}
 
-	var buf bytes.Buffer
-	Text(&buf, s, Options{Color: false, Width: 80})
-
-	var bars []int
-	for _, line := range strings.Split(buf.String(), "\n") {
-		if strings.Contains(line, "[") && strings.Contains(line, "ms") {
-			bars = append(bars, strings.Count(line, "█"))
-		}
+	var fields map[string]any
+	if err := json.Unmarshal(renderJSON(t, empty, Options{}), &fields); err != nil {
+		t.Fatalf("невалидный JSON на пустом прогоне: %v", err)
 	}
-	if len(bars) != 3 {
-		t.Fatalf("строк гистограммы %d, want 3", len(bars))
-	}
-	if bars[1] != 0 {
-		t.Errorf("пустой бакет нарисован %d столбиками, want 0", bars[1])
-	}
-	if bars[2] == 0 {
-		t.Error("бакет на 7 замеров нарисован пустым — не отличить от нуля")
+	if fields["histogram"] == nil {
+		t.Error("histogram должен быть [], а не null — потребителю проще итерироваться")
 	}
 }

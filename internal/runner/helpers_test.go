@@ -21,6 +21,16 @@ func serve(t *testing.T, h http.HandlerFunc) *httptest.Server {
 	return srv
 }
 
+// serveTLS — то же, но по HTTPS с самоподписанным сертификатом.
+// Вызывающий обязан выставить Config.Insecure, иначе клиент его отвергнет.
+func serveTLS(t *testing.T, h http.HandlerFunc) *httptest.Server {
+	t.Helper()
+
+	srv := httptest.NewTLSServer(h)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // sleepServer отвечает пустым 200 после задержки.
 func sleepServer(t *testing.T, d time.Duration) *httptest.Server {
 	t.Helper()

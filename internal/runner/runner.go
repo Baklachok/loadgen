@@ -15,6 +15,7 @@ type Result struct {
 	StatusCode int
 	Err        error
 	BytesRead  int64
+	Trace      *Trace // разбивка по фазам; nil, когда трассировка выключена
 }
 
 type Config struct {
@@ -27,6 +28,7 @@ type Config struct {
 	Concurrency int
 	Timeout     time.Duration
 	Rate        float64 // >0 — open-loop с постоянной частотой; 0 — closed-loop
+	Trace       bool    // собирать разбивку latency по фазам соединения
 
 	DisableKeepAlive bool
 	Insecure         bool

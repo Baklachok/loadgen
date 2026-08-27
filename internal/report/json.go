@@ -27,6 +27,23 @@ type jsonBucket struct {
 	Count   int     `json:"count"`
 }
 
+type jsonPhase struct {
+	Count int     `json:"count"`
+	P50Ms float64 `json:"p50_ms"`
+	P90Ms float64 `json:"p90_ms"`
+	P99Ms float64 `json:"p99_ms"`
+	MaxMs float64 `json:"max_ms"`
+}
+
+type jsonTrace struct {
+	Traced  int       `json:"traced"`
+	Reused  int       `json:"reused"`
+	DNS     jsonPhase `json:"dns"`
+	Connect jsonPhase `json:"connect"`
+	TLS     jsonPhase `json:"tls"`
+	TTFB    jsonPhase `json:"ttfb"`
+}
+
 type jsonSummary struct {
 	Total     int     `json:"total"`
 	Success   int     `json:"success"`
@@ -42,6 +59,10 @@ type jsonSummary struct {
 	// иначе потребитель решит, что расписание было и оно совпало.
 	Corrected *jsonLatencies `json:"corrected,omitempty"`
 	MaxLagMs  *float64       `json:"max_lag_ms,omitempty"`
+
+	// Без -trace фаз не измеряли — поля быть не должно вовсе,
+	// иначе потребитель решит, что все они нулевые.
+	Trace *jsonTrace `json:"trace,omitempty"`
 
 	Histogram []jsonBucket            `json:"histogram"`
 	Codes     map[int]int             `json:"codes"`
@@ -66,6 +87,16 @@ func latencies(l stats.Latencies) jsonLatencies {
 	}
 }
 
+func phase(ph stats.PhaseStats) jsonPhase {
+	return jsonPhase{
+		Count: ph.Count,
+		P50Ms: ms(ph.P50),
+		P90Ms: ms(ph.P90),
+		P99Ms: ms(ph.P99),
+		MaxMs: ms(ph.Max),
+	}
+}
+
 func JSON(w io.Writer, s stats.Summary, opt Options) error {
 	out := jsonSummary{
 		Total:         s.Total,
@@ -79,6 +110,17 @@ func JSON(w io.Writer, s stats.Summary, opt Options) error {
 		Histogram:     make([]jsonBucket, 0, len(s.Histogram)),
 		Codes:         s.Codes,
 		Errors:        s.Errors,
+	}
+
+	if s.Trace != nil {
+		out.Trace = &jsonTrace{
+			Traced:  s.Trace.Traced,
+			Reused:  s.Trace.Reused,
+			DNS:     phase(s.Trace.DNS),
+			Connect: phase(s.Trace.Connect),
+			TLS:     phase(s.Trace.TLS),
+			TTFB:    phase(s.Trace.TTFB),
+		}
 	}
 
 	if opt.OpenLoop {

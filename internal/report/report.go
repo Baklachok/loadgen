@@ -81,6 +81,27 @@ func Header(w io.Writer, cfg runner.Config, opt Options) {
 func Text(w io.Writer, s stats.Summary, opt Options) {
 	p := palette(opt.Color)
 
+	writeTotals(w, s, p)
+
+	// Без единого успешного запроса печатать нечего: перцентили, гистограмма
+	// и фазы соединения считаются по успешным.
+	if s.Success > 0 {
+		writeLatency(w, s, opt, p)
+
+		if s.Trace != nil {
+			writeTrace(w, s.Trace, p)
+		}
+		if len(s.Histogram) > 0 {
+			fmt.Fprintf(w, "\n%s\n", p.bold("Распределение"))
+			writeHistogram(w, s.Histogram, p, opt.Width)
+		}
+	}
+
+	writeCodes(w, s, p)
+	writeErrors(w, s, p)
+}
+
+func writeTotals(w io.Writer, s stats.Summary, p palette) {
 	failed := strconv.Itoa(s.Failed)
 	if s.Failed > 0 {
 		failed = p.red(failed)
@@ -92,30 +113,20 @@ func Text(w io.Writer, s stats.Summary, opt Options) {
 	fmt.Fprintf(w, "%s %v\n", p.dim("Время:     "), s.Elapsed.Round(time.Millisecond))
 	fmt.Fprintf(w, "%s %s\n", p.dim("RPS:       "), p.bold(fmt.Sprintf("%.1f", s.RPS)))
 	fmt.Fprintf(w, "%s %.2f МБ/с\n", p.dim("Throughput:"), s.Throughput)
+}
 
-	if s.Success == 0 {
-		writeCodes(w, s, p)
-		writeErrors(w, s, p)
-		return
-	}
-
+func writeLatency(w io.Writer, s stats.Summary, opt Options, p palette) {
 	fmt.Fprintf(w, "\n%s\n", p.bold("Latency (время запроса)"))
 	writeLatencies(w, s.Latency, p)
 
-	if opt.OpenLoop {
-		// разница между блоками — и есть coordinated omission
-		fmt.Fprintf(w, "\n%s\n", p.bold("Latency с поправкой на расписание"))
-		writeLatencies(w, s.Corrected, p)
-		fmt.Fprintf(w, "\n%s %v\n", p.dim("Макс. отставание старта:"), s.MaxLag.Round(time.Microsecond))
+	if !opt.OpenLoop {
+		return
 	}
 
-	if len(s.Histogram) > 0 {
-		fmt.Fprintf(w, "\n%s\n", p.bold("Распределение"))
-		writeHistogram(w, s.Histogram, p, opt.Width)
-	}
-
-	writeCodes(w, s, p)
-	writeErrors(w, s, p)
+	// разница между блоками — и есть coordinated omission
+	fmt.Fprintf(w, "\n%s\n", p.bold("Latency с поправкой на расписание"))
+	writeLatencies(w, s.Corrected, p)
+	fmt.Fprintf(w, "\n%s %v\n", p.dim("Макс. отставание старта:"), s.MaxLag.Round(time.Microsecond))
 }
 
 func writeLatencies(w io.Writer, l stats.Latencies, p palette) {
@@ -211,4 +222,47 @@ func sortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// Одна строка формата на все три места — заголовок, пустую фазу и заполненную.
+// Разъехавшись, они ломают выравнивание молча, а заметно это только глазами.
+const tracePhaseRow = "  %-14s %8s %10s %10s %10s"
+
+// writeTrace печатает разбивку по фазам соединения. Колонка «замеров» тут
+// не украшение: при keep-alive резолв и рукопожатие делает только первый
+// запрос на соединение, и без неё p99 по трём замерам выглядел бы так же
+// солидно, как p99 по десяти тысячам.
+func writeTrace(w io.Writer, t *stats.TraceSummary, p palette) {
+	fmt.Fprintf(w, "\n%s\n", p.bold("Фазы соединения"))
+	fmt.Fprintf(w, "%s\n", p.dim(fmt.Sprintf(tracePhaseRow, "", "замеров", "p50", "p99", "max")))
+
+	dur := func(d time.Duration) string { return d.Round(time.Microsecond).String() }
+
+	row := func(name string, ph stats.PhaseStats) {
+		// Фаза без единого замера получает прочерк, а не нули: ноль читался бы
+		// как «прошла мгновенно», хотя её попросту не было.
+		if ph.Count == 0 {
+			fmt.Fprintf(w, tracePhaseRow+"\n", name, "0", "—", "—", "—")
+			return
+		}
+		fmt.Fprintf(w, tracePhaseRow+"\n", name, strconv.Itoa(ph.Count),
+			dur(ph.P50), dur(ph.P99), dur(ph.Max))
+	}
+
+	row("DNS", t.DNS)
+	row("TCP connect", t.Connect)
+	row("TLS handshake", t.TLS)
+	row("TTFB", t.TTFB)
+
+	fmt.Fprintf(w, "\n  %s\n", p.dim(reuseNote(t)))
+}
+
+// reuseNote меняет фразу целиком, а не подставляет ноль: «0 из 200 запросов
+// взяли соединение из пула — фазы им не понадобились» читается как бессмыслица.
+func reuseNote(t *stats.TraceSummary) string {
+	if t.Reused == 0 {
+		return fmt.Sprintf("ни один из %d запросов не переиспользовал соединение — каждый устанавливал своё", t.Traced)
+	}
+	return fmt.Sprintf("%d из %d запросов взяли соединение из пула — фазы DNS, TCP и TLS им не понадобились",
+		t.Reused, t.Traced)
 }

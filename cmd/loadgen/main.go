@@ -73,6 +73,7 @@ func main() {
 		timeout     = flag.Duration("t", 10*time.Second, "таймаут запроса")
 		rateLimit   = flag.Float64("rate", 0, "постоянный RPS, режим open-loop (0 — closed-loop)")
 		output      = flag.String("o", "text", "формат вывода: text или json")
+		trace       = flag.Bool("trace", false, "разбить latency по фазам: DNS, TCP, TLS, TTFB")
 		insecure    = flag.Bool("insecure", false, "не проверять TLS-сертификат")
 		noKeepAlive = flag.Bool("disable-keepalive", false, "новое соединение на каждый запрос")
 		http2       = flag.Bool("http2", false, "разрешить HTTP/2")
@@ -126,6 +127,7 @@ func main() {
 		Concurrency:      *c,
 		Timeout:          *timeout,
 		Rate:             *rateLimit,
+		Trace:            *trace,
 		DisableKeepAlive: *noKeepAlive,
 		Insecure:         *insecure,
 		HTTP2:            *http2,
