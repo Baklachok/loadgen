@@ -6,7 +6,8 @@ LDFLAGS := -X main.version=$(VERSION)
 # которая молча ничего не находит даже на кривых файлах
 GOFMT := $(shell go env GOROOT)/bin/gofmt
 
-PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+# Тот же набор, что в .goreleaser.yml — иначе локальная проверка и релиз разойдутся
+PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
 os   = $(word 1,$(subst /, ,$1))
 arch = $(word 2,$(subst /, ,$1))

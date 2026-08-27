@@ -1,0 +1,40 @@
+version: 2
+
+project_name: loadgen
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/loadgen
+    binary: loadgen
+    env:
+      - CGO_ENABLED=0
+    # Префикс v ставим руками: goreleaser его срезает, а `make build` через
+    # git describe оставляет — иначе loadgen -version врал бы по-разному
+    # в зависимости от того, чем собирали.
+    ldflags:
+      - -s -w -X main.version=v{{ .Version }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'

@@ -26,6 +26,10 @@
 
 ## Установка
 
+Готовые архивы — на [странице релизов](https://github.com/Baklachok/loadgen/releases), внутри один бинарник. На macOS перед первым запуском снять карантин: `xattr -d com.apple.quarantine loadgen`.
+
+Через Go:
+
 ```bash
 go install github.com/Baklachok/loadgen/cmd/loadgen@latest
 ```
