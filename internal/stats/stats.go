@@ -33,11 +33,13 @@ type Latencies struct {
 }
 
 type Summary struct {
+	Total  int // измеренных запросов, без прогрева
+	Warmup int // отброшено как прогрев
+
 	// Три исхода, а не два. 429 и таймаут — разные события: первый означает,
 	// что сервер работает и отказывает, второй — что ответа не было вовсе.
 	// Слепить их вместе значит либо отчитаться об успехе там, где сервис
 	// отдавал одни отказы, либо утопить перцентили в значении таймаута.
-	Total  int // всего запросов
 	OK     int // ответ 2xx
 	NonOK  int // ответ получен, но не 2xx
 	Failed int // ответа не было: таймаут, обрыв, отказ в соединении
@@ -93,7 +95,6 @@ type Bucket struct {
 
 func Compute(results []runner.Result, elapsed time.Duration) Summary {
 	s := Summary{
-		Total:   len(results),
 		Elapsed: elapsed,
 		Codes:   make(map[int]int),
 		Errors:  make(map[ErrorKind]int),
@@ -102,6 +103,14 @@ func Compute(results []runner.Result, elapsed time.Duration) Summary {
 	var service, corrected samples
 
 	for _, r := range results {
+		// Прогрев считаем, но нигде больше не учитываем: отброшенное молча —
+		// способ потерять доверие к отчёту.
+		if r.Warmup {
+			s.Warmup++
+			continue
+		}
+
+		s.Total++
 		s.MaxLag = max(s.MaxLag, r.Lag)
 
 		if r.Err != nil {

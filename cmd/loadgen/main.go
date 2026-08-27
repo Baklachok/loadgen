@@ -83,6 +83,9 @@ func main() {
 	var headers headerFlag
 	flag.Var(&headers, "H", "заголовок в формате 'Key: Value' (можно несколько раз)")
 
+	var warmup warmupFlag
+	flag.Var(&warmup, "warmup", "прогрев: длительность (5s) или число запросов (100), в статистику не идёт")
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "loadgen — нагрузочный тестер HTTP\n\n")
 		fmt.Fprintf(os.Stderr, "Использование:\n  loadgen [флаги] URL\n\nФлаги:\n")
@@ -128,6 +131,8 @@ func main() {
 		Timeout:          *timeout,
 		Rate:             *rateLimit,
 		Trace:            *trace,
+		WarmupRequests:   warmup.requests,
+		WarmupDuration:   warmup.duration,
 		DisableKeepAlive: *noKeepAlive,
 		Insecure:         *insecure,
 		HTTP2:            *http2,

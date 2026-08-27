@@ -16,6 +16,7 @@ type Result struct {
 	Err        error
 	BytesRead  int64
 	Trace      *Trace // разбивка по фазам; nil, когда трассировка выключена
+	Warmup     bool   // запрос из прогрева: в статистику не идёт
 }
 
 type Config struct {
@@ -29,6 +30,14 @@ type Config struct {
 	Timeout     time.Duration
 	Rate        float64 // >0 — open-loop с постоянной частотой; 0 — closed-loop
 	Trace       bool    // собирать разбивку latency по фазам соединения
+
+	// Прогрев: первые запросы платят за TCP, TLS и холодные кэши сервера,
+	// к установившейся нагрузке это отношения не имеет. Задаётся либо числом
+	// запросов, либо длительностью — не тем и другим сразу. Прогрев входит
+	// в прогон, а не добавляется к нему: -n 1000 -warmup 100 шлёт 1000
+	// запросов, из которых измеряются 900.
+	WarmupRequests int
+	WarmupDuration time.Duration
 
 	DisableKeepAlive bool
 	Insecure         bool
@@ -56,6 +65,25 @@ func (c Config) Validate() error {
 	}
 	if c.Rate < 0 {
 		return fmt.Errorf("rate не может быть отрицательным, получено %v", c.Rate)
+	}
+	return c.validateWarmup()
+}
+
+func (c Config) validateWarmup() error {
+	if c.WarmupRequests < 0 || c.WarmupDuration < 0 {
+		return errors.New("прогрев не может быть отрицательным")
+	}
+	if c.WarmupRequests > 0 && c.WarmupDuration > 0 {
+		return errors.New("прогрев задаётся либо числом запросов, либо длительностью, но не обоими")
+	}
+
+	// Прогрев, съедающий весь прогон, оставляет пустую статистику —
+	// это молчаливо бесполезный результат, лучше сказать сразу.
+	if c.Requests > 0 && c.WarmupRequests >= c.Requests {
+		return fmt.Errorf("прогрев в %d запросов не оставляет что измерять из %d", c.WarmupRequests, c.Requests)
+	}
+	if c.Duration > 0 && c.WarmupDuration >= c.Duration {
+		return fmt.Errorf("прогрев в %v не оставляет времени на измерение из %v", c.WarmupDuration, c.Duration)
 	}
 	return nil
 }
@@ -96,7 +124,13 @@ func Run(ctx context.Context, cfg Config) ([]Result, error) {
 	defer tr.CloseIdleConnections()
 
 	results := make(chan Result, cfg.Concurrency)
-	e := &engine{cfg: cfg, client: newClient(cfg, tr), factory: factory, out: results}
+	e := &engine{
+		cfg:      cfg,
+		client:   newClient(cfg, tr),
+		factory:  factory,
+		out:      results,
+		runStart: time.Now(),
+	}
 
 	go func() {
 		defer close(results)

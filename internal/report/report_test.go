@@ -1,8 +1,6 @@
 package report
 
 import (
-	"bytes"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -10,58 +8,6 @@ import (
 
 	"github.com/Baklachok/loadgen/internal/stats"
 )
-
-func millis(n int) time.Duration { return time.Duration(n) * time.Millisecond }
-
-// render отдаёт весь текстовый отчёт строкой: тестам интересна не запись
-// в io.Writer, а то, что в ней оказалось.
-func render(s stats.Summary, opt Options) string {
-	var buf bytes.Buffer
-	Text(&buf, s, opt)
-	return buf.String()
-}
-
-func renderJSON(t *testing.T, s stats.Summary, opt Options) []byte {
-	t.Helper()
-
-	var buf bytes.Buffer
-	if err := JSON(&buf, s, opt); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
-}
-
-func sample() stats.Summary {
-	return stats.Summary{
-		Total: 100, OK: 90, NonOK: 8, Failed: 2,
-		Elapsed: 2 * time.Second, RPS: 49,
-		Latency:   stats.Latencies{Min: millis(1), Mean: millis(5), Max: millis(90), P50: millis(4), P90: millis(9), P95: millis(30), P99: millis(80)},
-		Corrected: stats.Latencies{Min: millis(1), Mean: millis(9), Max: millis(120), P50: millis(5), P90: millis(40), P95: millis(70), P99: millis(110)},
-		MaxLag:    millis(30),
-		Histogram: []stats.Bucket{
-			{Upper: millis(10), Count: 80},
-			{Upper: millis(20), Count: 3},
-			{Upper: millis(120), Count: 15},
-		},
-		BytesRead: 4096, Throughput: 0.002,
-		Codes:  map[int]int{200: 90, 404: 5, 503: 3},
-		Errors: map[stats.ErrorKind]int{stats.ErrTimeout: 2},
-	}
-}
-
-// traced — тот же прогон, но с -trace. Соединялись двое из тысячи,
-// рукопожатия TLS не было вовсе: обычная картина по HTTP с keep-alive.
-func traced() stats.Summary {
-	s := sample()
-	s.Trace = &stats.TraceSummary{
-		Traced:  1000,
-		Reused:  998,
-		DNS:     stats.PhaseStats{Count: 2, Latencies: stats.Latencies{P50: millis(1), P99: millis(3), Max: millis(3)}},
-		Connect: stats.PhaseStats{Count: 2, Latencies: stats.Latencies{P50: millis(1), P99: millis(2), Max: millis(2)}},
-		TTFB:    stats.PhaseStats{Count: 1000, Latencies: stats.Latencies{P50: millis(6), P99: millis(400), Max: millis(450)}},
-	}
-	return s
-}
 
 func TestTextNoEscapesWhenColorOff(t *testing.T) {
 	if strings.ContainsRune(render(sample(), Options{Color: false, Width: 80}), '\x1b') {
@@ -76,6 +22,7 @@ func TestTextHasEscapesWhenColorOn(t *testing.T) {
 }
 
 // Бар должен укладываться в ширину терминала: перенос строки разваливает картинку.
+
 func TestHistogramFitsWidth(t *testing.T) {
 	for _, width := range []int{40, 60, 80, 120, 200} {
 		for _, line := range strings.Split(render(sample(), Options{Width: width}), "\n") {
@@ -91,6 +38,7 @@ func TestHistogramFitsWidth(t *testing.T) {
 
 // Самый высокий столбик должен занимать всю доступную ширину, иначе картинка
 // схлопывается в огрызок независимо от размера окна.
+
 func TestHistogramScalesToWidth(t *testing.T) {
 	longest := func(width int) int {
 		best := 0
@@ -114,6 +62,7 @@ func TestHistogramSurvivesTinyWidth(t *testing.T) {
 
 // При длинном хвосте маленький бакет округляется в ноль столбиков и становится
 // неотличим от пустого — а это разные вещи.
+
 func TestHistogramShowsSmallBuckets(t *testing.T) {
 	s := sample()
 	s.Histogram = []stats.Bucket{
@@ -164,6 +113,7 @@ func TestTraceBlockOnlyWhenMeasured(t *testing.T) {
 
 // Пустая фаза должна быть видна как прочерк: ноль замеров и «0ms» —
 // разные утверждения, и путать их нельзя.
+
 func TestTraceShowsEmptyPhaseAsDash(t *testing.T) {
 	for _, line := range strings.Split(render(traced(), Options{Width: 80}), "\n") {
 		if !strings.Contains(line, "TLS handshake") {
@@ -179,6 +129,7 @@ func TestTraceShowsEmptyPhaseAsDash(t *testing.T) {
 
 // Колонка «замеров» — главное в этом блоке: без неё p99 по двум замерам
 // выглядит так же солидно, как p99 по тысяче.
+
 func TestTraceShowsSampleCounts(t *testing.T) {
 	out := render(traced(), Options{Width: 100})
 
@@ -190,6 +141,7 @@ func TestTraceShowsSampleCounts(t *testing.T) {
 }
 
 // «0 из 200 взяли соединение из пула — фазы им не понадобились» — бессмыслица.
+
 func TestTraceNoteWhenNothingReused(t *testing.T) {
 	s := traced()
 	s.Trace.Reused = 0
@@ -203,100 +155,6 @@ func TestTraceNoteWhenNothingReused(t *testing.T) {
 	}
 }
 
-func TestJSONShape(t *testing.T) {
-	var got struct {
-		Total   int `json:"total"`
-		Latency struct {
-			P99Ms float64 `json:"p99_ms"`
-		} `json:"latency"`
-		Corrected *struct {
-			P99Ms float64 `json:"p99_ms"`
-		} `json:"corrected"`
-		MaxLagMs  *float64       `json:"max_lag_ms"`
-		Codes     map[string]int `json:"codes"`
-		Errors    map[string]int `json:"errors"`
-		Histogram []struct {
-			UpperMs float64 `json:"upper_ms"`
-			Count   int     `json:"count"`
-		} `json:"histogram"`
-	}
-
-	raw := renderJSON(t, sample(), Options{OpenLoop: true})
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("невалидный JSON: %v\n%s", err, raw)
-	}
-
-	if got.Total != 100 {
-		t.Errorf("total = %d, want 100", got.Total)
-	}
-	if got.Latency.P99Ms != 80 {
-		t.Errorf("latency.p99_ms = %v, want 80", got.Latency.P99Ms)
-	}
-	if got.Corrected == nil || got.Corrected.P99Ms != 110 {
-		t.Errorf("corrected = %+v, want p99_ms=110", got.Corrected)
-	}
-	if got.MaxLagMs == nil || *got.MaxLagMs != 30 {
-		t.Errorf("max_lag_ms = %v, want 30", got.MaxLagMs)
-	}
-	if got.Codes["200"] != 90 || got.Codes["503"] != 3 {
-		t.Errorf("codes = %v", got.Codes)
-	}
-	if got.Errors["timeout"] != 2 {
-		t.Errorf("errors = %v", got.Errors)
-	}
-	if len(got.Histogram) != 3 || got.Histogram[0].Count != 80 {
-		t.Errorf("histogram = %+v", got.Histogram)
-	}
-}
-
-func TestJSONOmitsCorrectedInClosedLoop(t *testing.T) {
-	out := string(renderJSON(t, sample(), Options{OpenLoop: false}))
-
-	if strings.Contains(out, "corrected") || strings.Contains(out, "max_lag_ms") {
-		t.Error("в closed-loop полей поправки быть не должно: иначе потребитель решит, что расписание было")
-	}
-}
-
-func TestJSONOmitsTraceWhenNotMeasured(t *testing.T) {
-	if out := string(renderJSON(t, sample(), Options{})); strings.Contains(out, `"trace"`) {
-		t.Error("без -trace секции trace в JSON быть не должно")
-	}
-
-	var got struct {
-		Trace *struct {
-			Traced  int `json:"traced"`
-			Reused  int `json:"reused"`
-			Connect struct {
-				Count int `json:"count"`
-			} `json:"connect"`
-		} `json:"trace"`
-	}
-	if err := json.Unmarshal(renderJSON(t, traced(), Options{}), &got); err != nil {
-		t.Fatalf("невалидный JSON: %v", err)
-	}
-
-	if got.Trace == nil || got.Trace.Traced != 1000 || got.Trace.Reused != 998 {
-		t.Errorf("trace = %+v", got.Trace)
-	}
-	if got.Trace.Connect.Count != 2 {
-		t.Errorf("connect.count = %d, ожидалось 2", got.Trace.Connect.Count)
-	}
-}
-
-func TestJSONOnEmptyRun(t *testing.T) {
-	empty := stats.Summary{Codes: map[int]int{}, Errors: map[stats.ErrorKind]int{}}
-
-	var fields map[string]any
-	if err := json.Unmarshal(renderJSON(t, empty, Options{}), &fields); err != nil {
-		t.Fatalf("невалидный JSON на пустом прогоне: %v", err)
-	}
-	if fields["histogram"] == nil {
-		t.Error("histogram должен быть [], а не null — потребителю проще итерироваться")
-	}
-}
-
-// Заголовок отчёта не должен читаться как успех, когда сервис отдавал
-// одни отказы: ровно эта строка раньше и врала.
 func TestTotalsDoNotReadAsSuccessOnAllNon2xx(t *testing.T) {
 	s := stats.Summary{
 		Total: 12500, OK: 0, NonOK: 12500,
@@ -320,23 +178,18 @@ func TestTotalsDoNotReadAsSuccessOnAllNon2xx(t *testing.T) {
 	}
 }
 
-func TestJSONReportsOutcomesSeparately(t *testing.T) {
-	var got struct {
-		Total       int     `json:"total"`
-		OK          int     `json:"ok"`
-		NonOK       int     `json:"non_2xx"`
-		Failed      int     `json:"failed"`
-		SuccessRate float64 `json:"success_rate"`
+func TestWarmupLineOnlyWhenUsed(t *testing.T) {
+	const marker = "Прогрев:"
+
+	if strings.Contains(render(sample(), Options{Width: 100}), marker) {
+		t.Error("строка прогрева печатается, хотя прогрева не было")
 	}
 
-	if err := json.Unmarshal(renderJSON(t, sample(), Options{}), &got); err != nil {
-		t.Fatal(err)
-	}
+	s := sample()
+	s.Warmup = 100
 
-	if got.Total != 100 || got.OK != 90 || got.NonOK != 8 || got.Failed != 2 {
-		t.Errorf("исходы: %+v", got)
-	}
-	if got.SuccessRate != 0.9 {
-		t.Errorf("success_rate = %v, ожидалось 0.9", got.SuccessRate)
+	out := render(s, Options{Width: 100})
+	if !strings.Contains(out, marker) || !strings.Contains(out, "100 отброшено") {
+		t.Errorf("прогрев не показан в шапке:\n%s", out)
 	}
 }

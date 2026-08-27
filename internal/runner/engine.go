@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,6 +19,22 @@ type engine struct {
 	client  *http.Client
 	factory *requestFactory
 	out     chan<- Result
+
+	runStart time.Time    // отсчёт прогрева по времени
+	started  atomic.Int64 // отсчёт прогрева по количеству
+}
+
+// isWarmup решает судьбу запроса в момент его старта, а не завершения:
+// иначе медленный запрос из прогрева «переедет» в измерения ровно тогда,
+// когда прогрев важнее всего.
+func (e *engine) isWarmup(at time.Time) bool {
+	if e.cfg.WarmupDuration > 0 {
+		return at.Sub(e.runStart) < e.cfg.WarmupDuration
+	}
+	if e.cfg.WarmupRequests > 0 {
+		return e.started.Add(1) <= int64(e.cfg.WarmupRequests)
+	}
+	return false
 }
 
 // do выполняет один запрос и замеряет его целиком: от отправки до дочитанного тела.
@@ -58,8 +75,11 @@ func (e *engine) do(ctx context.Context) Result {
 // emit шлёт запрос и кладёт результат в канал. Отменённый запрос — это Ctrl+C,
 // а не отказ сервера, и в статистике ему не место.
 func (e *engine) emit(ctx context.Context, lag time.Duration) {
+	warmup := e.isWarmup(time.Now())
+
 	res := e.do(ctx)
 	res.Lag = lag
+	res.Warmup = warmup
 
 	if errors.Is(res.Err, context.Canceled) {
 		return

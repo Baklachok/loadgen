@@ -110,9 +110,16 @@ func writeTotals(w io.Writer, s stats.Summary, p palette) {
 		fmt.Fprintf(w, "%s %s\n", p.dim(fmt.Sprintf("%-*s", totalsLabel, label)), value)
 	}
 
+	row("Всего:", strconv.Itoa(s.Total))
+
+	// Строка прогрева появляется только когда он был: постоянный «Прогрев: 0»
+	// приучает не читать шапку.
+	if s.Warmup > 0 {
+		row("Прогрев:", p.dim(fmt.Sprintf("%d отброшено", s.Warmup)))
+	}
+
 	// Доля 2xx стоит вплотную к числу намеренно: «Успешно: 12500» на прогоне,
 	// где сервис отдавал одни 429, читается как хорошая новость.
-	row("Всего:", strconv.Itoa(s.Total))
 	row("Успешно (2xx):", p.green(fmt.Sprintf("%d (%.1f%%)", s.OK, s.SuccessRate()*100)))
 	row("Не-2xx:", highlightNonZero(s.NonOK, p.yellow))
 	row("Без ответа:", highlightNonZero(s.Failed, p.red))

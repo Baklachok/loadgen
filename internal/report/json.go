@@ -46,6 +46,7 @@ type jsonTrace struct {
 
 type jsonSummary struct {
 	Total       int     `json:"total"`
+	Warmup      int     `json:"warmup_discarded"`
 	OK          int     `json:"ok"`
 	NonOK       int     `json:"non_2xx"`
 	Failed      int     `json:"failed"`
@@ -102,6 +103,7 @@ func phase(ph stats.PhaseStats) jsonPhase {
 func JSON(w io.Writer, s stats.Summary, opt Options) error {
 	out := jsonSummary{
 		Total:         s.Total,
+		Warmup:        s.Warmup,
 		OK:            s.OK,
 		NonOK:         s.NonOK,
 		Failed:        s.Failed,

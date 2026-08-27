@@ -52,7 +52,9 @@ func computeTrace(results []runner.Result) *TraceSummary {
 	summary := &TraceSummary{}
 
 	for _, r := range results {
-		if r.Trace == nil {
+		// Прогрев исключается и здесь: именно он делает рукопожатия, и оставить
+		// их в фазах значило бы отчитаться о том, что шапка назвала отброшенным.
+		if r.Trace == nil || r.Warmup {
 			continue
 		}
 

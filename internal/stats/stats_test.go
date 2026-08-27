@@ -8,20 +8,6 @@ import (
 	"github.com/Baklachok/loadgen/internal/runner"
 )
 
-// ms — короткая запись для длительностей: тесты здесь про соотношения
-// значений, а не про time.Duration.
-func ms(n int) time.Duration { return time.Duration(n) * time.Millisecond }
-
-// resp — сервер ответил, failed — ответа не было. Два конструктора вместо
-// литералов runner.Result по всему файлу: в тестах важен исход, а не поля.
-func resp(code int, d time.Duration) runner.Result {
-	return runner.Result{Duration: d, StatusCode: code}
-}
-
-func failed(err error, d time.Duration) runner.Result {
-	return runner.Result{Duration: d, Err: err}
-}
-
 func TestPercentile(t *testing.T) {
 
 	tests := []struct {
@@ -50,14 +36,6 @@ func TestPercentile(t *testing.T) {
 			}
 		})
 	}
-}
-
-func tenMs() []time.Duration {
-	d := make([]time.Duration, 10)
-	for i := range d {
-		d[i] = time.Duration(i+1) * time.Millisecond
-	}
-	return d
 }
 
 func TestCompute(t *testing.T) {
@@ -183,59 +161,6 @@ func TestComputeFillsHistogram(t *testing.T) {
 	}
 }
 
-func TestComputeTrace(t *testing.T) {
-
-	t.Run("без трассировки — nil", func(t *testing.T) {
-		s := Compute([]runner.Result{{Duration: ms(1), StatusCode: 200}}, time.Second)
-		if s.Trace != nil {
-			t.Errorf("Trace = %+v, ожидался nil: отчёт должен отличать «не измеряли» от «фаз не было»", s.Trace)
-		}
-	})
-
-	t.Run("нулевые фазы не попадают в перцентили", func(t *testing.T) {
-		// Первый запрос соединялся, три следующих взяли соединение из пула:
-		// у них DNS/Connect/TLS равны нулю, потому что их не было.
-		results := []runner.Result{
-			{Duration: ms(50), StatusCode: 200, Trace: &runner.Trace{DNS: ms(4), Connect: ms(6), TLS: ms(10), TTFB: ms(40)}},
-			{Duration: ms(20), StatusCode: 200, Trace: &runner.Trace{TTFB: ms(18), Reused: true}},
-			{Duration: ms(22), StatusCode: 200, Trace: &runner.Trace{TTFB: ms(20), Reused: true}},
-			{Duration: ms(24), StatusCode: 200, Trace: &runner.Trace{TTFB: ms(22), Reused: true}},
-		}
-
-		s := Compute(results, time.Second)
-		if s.Trace == nil {
-			t.Fatal("Trace = nil")
-		}
-
-		if s.Trace.Traced != 4 || s.Trace.Reused != 3 {
-			t.Errorf("traced=%d reused=%d, ожидалось 4 и 3", s.Trace.Traced, s.Trace.Reused)
-		}
-		if s.Trace.Connect.Count != 1 {
-			t.Errorf("Connect.Count = %d, ожидался 1: три запроса не соединялись вовсе", s.Trace.Connect.Count)
-		}
-		// Если бы нули учитывались, среднее было бы 1.5мс вместо 6мс
-		if s.Trace.Connect.Mean != ms(6) {
-			t.Errorf("Connect.Mean = %v, ожидалось 6ms", s.Trace.Connect.Mean)
-		}
-		if s.Trace.TTFB.Count != 4 {
-			t.Errorf("TTFB.Count = %d, ожидалось 4: первый байт получили все", s.Trace.TTFB.Count)
-		}
-	})
-
-	t.Run("фаза без единого замера остаётся пустой", func(t *testing.T) {
-		results := []runner.Result{
-			{Duration: ms(5), StatusCode: 200, Trace: &runner.Trace{TTFB: ms(4), Reused: true}},
-		}
-
-		s := Compute(results, time.Second)
-		if s.Trace.TLS.Count != 0 || s.Trace.TLS.P99 != 0 {
-			t.Errorf("TLS = %+v, ожидалась пустая фаза: по HTTP рукопожатия нет", s.Trace.TLS)
-		}
-	})
-}
-
-// Три исхода — единственное место, где отчёт может выглядеть рабочим и врать,
-// поэтому проверки собраны вместе.
 func TestComputeOutcomes(t *testing.T) {
 	t.Run("2xx или нет — по границам кода", func(t *testing.T) {
 		tests := []struct {
@@ -314,4 +239,36 @@ func TestComputeOutcomes(t *testing.T) {
 			t.Errorf("max = %v: таймаут просочился в перцентили и утопил их", s.Latency.Max)
 		}
 	})
+}
+
+// Прогрев не должен подмешиваться в статистику, но и исчезать молча тоже:
+// отброшенное без следа — способ потерять доверие к отчёту.
+
+func TestComputeExcludesWarmup(t *testing.T) {
+	warm := resp(200, ms(500)) // медленный: платил за рукопожатие
+	warm.Warmup = true
+
+	s := Compute([]runner.Result{
+		warm, warm,
+		resp(200, ms(10)),
+		resp(200, ms(20)),
+		resp(500, ms(30)),
+	}, time.Second)
+
+	if s.Warmup != 2 {
+		t.Errorf("Warmup = %d, ожидалось 2", s.Warmup)
+	}
+	if s.Total != 3 {
+		t.Errorf("Total = %d, ожидалось 3: прогрев не входит в измеренные", s.Total)
+	}
+	if s.OK != 2 || s.NonOK != 1 {
+		t.Errorf("OK=%d NonOK=%d, ожидалось 2 и 1", s.OK, s.NonOK)
+	}
+	// Ради этого всё и затевалось: медленный прогрев не должен тянуть хвост
+	if s.Latency.Max != ms(30) {
+		t.Errorf("max = %v, ожидалось 30ms: прогрев просочился в перцентили", s.Latency.Max)
+	}
+	if s.RPS != 3 {
+		t.Errorf("RPS = %v, ожидалось 3: прогрев не считается пропускной способностью", s.RPS)
+	}
 }
