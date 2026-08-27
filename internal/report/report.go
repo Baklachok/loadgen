@@ -1,0 +1,214 @@
+// Package report отвечает только за представление: текст для человека,
+// JSON для CI. Ничего не считает — все числа приходят готовыми из stats.
+package report
+
+import (
+	"cmp"
+	"fmt"
+	"io"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"golang.org/x/term"
+
+	"github.com/Baklachok/loadgen/internal/runner"
+	"github.com/Baklachok/loadgen/internal/stats"
+)
+
+type Options struct {
+	Color    bool // раскрашивать вывод ANSI-кодами
+	Width    int  // ширина терминала: под неё масштабируется гистограмма
+	OpenLoop bool // печатать блок с поправкой на расписание
+}
+
+// ColorEnabled решает, можно ли красить. Пайп, редирект в файл и CI — нельзя:
+// ANSI-коды уедут в данные. NO_COLOR — общепринятый способ выключить цвет руками.
+func ColorEnabled(f *os.File) bool {
+	if _, set := os.LookupEnv("NO_COLOR"); set {
+		return false
+	}
+	if os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
+}
+
+// TerminalWidth возвращает ширину терминала, а для не-терминала — fallback.
+func TerminalWidth(f *os.File, fallback int) int {
+	w, _, err := term.GetSize(int(f.Fd()))
+	if err != nil || w <= 0 {
+		return fallback
+	}
+	return w
+}
+
+type palette bool
+
+func (p palette) wrap(code, s string) string {
+	if !p {
+		return s
+	}
+	return "\x1b[" + code + "m" + s + "\x1b[0m"
+}
+
+func (p palette) dim(s string) string    { return p.wrap("2", s) }
+func (p palette) bold(s string) string   { return p.wrap("1", s) }
+func (p palette) red(s string) string    { return p.wrap("31", s) }
+func (p palette) green(s string) string  { return p.wrap("32", s) }
+func (p palette) yellow(s string) string { return p.wrap("33", s) }
+func (p palette) cyan(s string) string   { return p.wrap("36", s) }
+
+// Header печатается до прогона, чтобы было видно, что вообще запустили.
+func Header(w io.Writer, cfg runner.Config, opt Options) {
+	p := palette(opt.Color)
+
+	mode := fmt.Sprintf("closed-loop, %d потоков", cfg.Concurrency)
+	if cfg.Rate > 0 {
+		mode = fmt.Sprintf("open-loop %.0f RPS, до %d запросов в полёте", cfg.Rate, cfg.Concurrency)
+	}
+
+	target := p.bold(cfg.URL)
+	if cfg.Duration > 0 {
+		fmt.Fprintf(w, "Прогон %v на %s %s\n\n", cfg.Duration, target, p.dim("("+mode+")"))
+		return
+	}
+	fmt.Fprintf(w, "Запуск %d запросов к %s %s\n\n", cfg.Requests, target, p.dim("("+mode+")"))
+}
+
+func Text(w io.Writer, s stats.Summary, opt Options) {
+	p := palette(opt.Color)
+
+	failed := strconv.Itoa(s.Failed)
+	if s.Failed > 0 {
+		failed = p.red(failed)
+	}
+
+	fmt.Fprintf(w, "%s %d\n", p.dim("Всего:     "), s.Total)
+	fmt.Fprintf(w, "%s %s\n", p.dim("Успешно:   "), p.green(strconv.Itoa(s.Success)))
+	fmt.Fprintf(w, "%s %s\n", p.dim("Ошибок:    "), failed)
+	fmt.Fprintf(w, "%s %v\n", p.dim("Время:     "), s.Elapsed.Round(time.Millisecond))
+	fmt.Fprintf(w, "%s %s\n", p.dim("RPS:       "), p.bold(fmt.Sprintf("%.1f", s.RPS)))
+	fmt.Fprintf(w, "%s %.2f МБ/с\n", p.dim("Throughput:"), s.Throughput)
+
+	if s.Success == 0 {
+		writeCodes(w, s, p)
+		writeErrors(w, s, p)
+		return
+	}
+
+	fmt.Fprintf(w, "\n%s\n", p.bold("Latency (время запроса)"))
+	writeLatencies(w, s.Latency, p)
+
+	if opt.OpenLoop {
+		// разница между блоками — и есть coordinated omission
+		fmt.Fprintf(w, "\n%s\n", p.bold("Latency с поправкой на расписание"))
+		writeLatencies(w, s.Corrected, p)
+		fmt.Fprintf(w, "\n%s %v\n", p.dim("Макс. отставание старта:"), s.MaxLag.Round(time.Microsecond))
+	}
+
+	if len(s.Histogram) > 0 {
+		fmt.Fprintf(w, "\n%s\n", p.bold("Распределение"))
+		writeHistogram(w, s.Histogram, p, opt.Width)
+	}
+
+	writeCodes(w, s, p)
+	writeErrors(w, s, p)
+}
+
+func writeLatencies(w io.Writer, l stats.Latencies, p palette) {
+	row := func(name string, d time.Duration) {
+		fmt.Fprintf(w, "  %s %v\n", p.dim(fmt.Sprintf("%-4s", name)), d.Round(time.Microsecond))
+	}
+	row("min", l.Min)
+	row("mean", l.Mean)
+	row("p50", l.P50)
+	row("p90", l.P90)
+	row("p95", l.P95)
+	row("p99", l.P99)
+	row("max", l.Max)
+}
+
+// writeHistogram рисует столбики, растягивая самый высокий на всю оставшуюся
+// ширину строки. Подписи считаются заранее, иначе бар не влезет и строка
+// переносится, разваливая картинку.
+func writeHistogram(w io.Writer, buckets []stats.Bucket, p palette, width int) {
+	labels := make([]string, len(buckets))
+	counts := make([]string, len(buckets))
+	labelW, countW, maxCount := 0, 0, 0
+
+	for i, b := range buckets {
+		labels[i] = b.Upper.Round(time.Microsecond).String()
+		counts[i] = strconv.Itoa(b.Count)
+		labelW = max(labelW, len(labels[i]))
+		countW = max(countW, len(counts[i]))
+		maxCount = max(maxCount, b.Count)
+	}
+	if maxCount == 0 {
+		return
+	}
+
+	// «  <label> [<count>] » — всё, что занято не баром
+	barW := width - labelW - countW - len("  ") - len(" [") - len("] ")
+	if barW < 1 {
+		barW = 1
+	}
+
+	for i, b := range buckets {
+		// непустой бакет обязан быть виден: при линейной шкале и длинном хвосте
+		// сотня замеров рядом с десятью тысячами округляется в ноль столбиков,
+		// и «мало» становится неотличимо от «пусто»
+		n := b.Count * barW / maxCount
+		if n == 0 && b.Count > 0 {
+			n = 1
+		}
+		bar := strings.Repeat("█", n)
+		fmt.Fprintf(w, "  %*s [%*s] %s\n", labelW, labels[i], countW, counts[i], p.cyan(bar))
+	}
+}
+
+func writeCodes(w io.Writer, s stats.Summary, p palette) {
+	if len(s.Codes) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n%s\n", p.bold("Коды ответов"))
+	for _, code := range sortedKeys(s.Codes) {
+		fmt.Fprintf(w, "  %s %d\n", colorCode(p, code), s.Codes[code])
+	}
+}
+
+func colorCode(p palette, code int) string {
+	s := strconv.Itoa(code)
+	switch {
+	case code >= 500:
+		return p.red(s)
+	case code >= 400:
+		return p.yellow(s)
+	case code >= 200 && code < 300:
+		return p.green(s)
+	}
+	return s
+}
+
+func writeErrors(w io.Writer, s stats.Summary, p palette) {
+	if len(s.Errors) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n%s\n", p.bold("Ошибки"))
+	for _, kind := range sortedKeys(s.Errors) {
+		fmt.Fprintf(w, "  %s %d\n", p.red(string(kind)), s.Errors[kind])
+	}
+}
+
+// sortedKeys нужен, чтобы два одинаковых прогона печатались одинаково:
+// обход map в Go намеренно рандомизирован.
+func sortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}

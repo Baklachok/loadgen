@@ -13,6 +13,8 @@ import (
 	"github.com/Baklachok/loadgen/internal/runner"
 )
 
+const histogramBuckets = 10
+
 type ErrorKind string
 
 const (
@@ -49,8 +51,18 @@ type Summary struct {
 	BytesRead  int64
 	Throughput float64 // МБ/с
 
+	// Histogram — распределение Latency по равным бакетам, для картинки в отчёте
+	Histogram []Bucket
+
 	Codes  map[int]int
 	Errors map[ErrorKind]int
+}
+
+// Bucket — один столбик гистограммы: сколько замеров попало в интервал,
+// заканчивающийся на Upper.
+type Bucket struct {
+	Upper time.Duration
+	Count int
 }
 
 func Compute(results []runner.Result, elapsed time.Duration) Summary {
@@ -86,6 +98,7 @@ func Compute(results []runner.Result, elapsed time.Duration) Summary {
 	if s.Success > 0 {
 		s.Latency = summarize(durations, total)
 		s.Corrected = summarize(corrected, totalCorrected)
+		s.Histogram = histogram(durations, histogramBuckets)
 	}
 
 	if elapsed > 0 {
@@ -94,6 +107,36 @@ func Compute(results []runner.Result, elapsed time.Duration) Summary {
 	}
 
 	return s
+}
+
+// histogram раскладывает уже отсортированные замеры по n равным по ширине
+// бакетам. Шкала линейная: на длинном хвосте это даёт пустоту между горбами,
+// но именно она и показывает, что распределение не одно, а два.
+func histogram(sorted []time.Duration, n int) []Bucket {
+	if len(sorted) == 0 || n < 1 {
+		return nil
+	}
+
+	lo, hi := sorted[0], sorted[len(sorted)-1]
+	if lo == hi {
+		return []Bucket{{Upper: hi, Count: len(sorted)}}
+	}
+
+	width := float64(hi-lo) / float64(n)
+	buckets := make([]Bucket, n)
+	for i := range buckets {
+		buckets[i].Upper = lo + time.Duration(float64(i+1)*width)
+	}
+	buckets[n-1].Upper = hi // накопленное округление не должно отсечь максимум
+
+	b := 0
+	for _, d := range sorted {
+		for b < n-1 && d > buckets[b].Upper {
+			b++
+		}
+		buckets[b].Count++
+	}
+	return buckets
 }
 
 // summarize сортирует xs на месте. Вызывается только при len(xs) > 0.
