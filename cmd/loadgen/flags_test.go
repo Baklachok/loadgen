@@ -128,3 +128,50 @@ func TestConfigRejectsContradictions(t *testing.T) {
 		}
 	})
 }
+
+// Методы в HTTP регистрозависимы, и все зарегистрированные записаны в верхнем.
+// «-m get» уходило дословно и получало 501 — но только от настоящего сервера:
+// Go отдаёт запрос хендлеру с любым методом, поэтому локально это выглядело
+// рабочим и ломалось на стенде.
+func TestConfigCanonicalisesMethod(t *testing.T) {
+	const url = "http://localhost:8080/"
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"нижний регистр", []string{"-m", "get"}, "GET"},
+		{"смешанный", []string{"-m", "Post"}, "POST"},
+		// Нестандартные методы тоже: PROPFIND и MKCOL записаны в верхнем
+		// ровно так же, а опечатку в них сделать проще всего.
+		{"нестандартный", []string{"-m", "propfind"}, "PROPFIND"},
+		{"уже канонический не портится", []string{"-m", "DELETE"}, "DELETE"},
+		{"умолчание", nil, "GET"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := parseConfig(t, append(tt.args, url)...)
+			if err != nil {
+				t.Fatalf("конфиг отвергнут: %v", err)
+			}
+			if cfg.Method != tt.want {
+				t.Errorf("метод %q, ожидался %q", cfg.Method, tt.want)
+			}
+		})
+	}
+
+	// Приведение регистра не должно чинить то, что чинить нельзя: пробел
+	// внутри метода остаётся, и запрос обрывается до отправки — это
+	// проверяет TestInvalidMethodFailsBeforeAnyRequest в runner.
+	t.Run("невалидный метод не чинится", func(t *testing.T) {
+		cfg, err := parseConfig(t, "-m", "PO ST", url)
+		if err != nil {
+			t.Fatalf("конфиг отвергнут раньше времени: %v", err)
+		}
+		if cfg.Method != "PO ST" {
+			t.Errorf("метод %q: приведение регистра подменило невалидный метод", cfg.Method)
+		}
+	})
+}

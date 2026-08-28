@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/Baklachok/loadgen/internal/runner"
@@ -115,6 +116,12 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 		requests = 0
 	}
 
+	// Регистр метода поднимаем: HTTP их различает, а все зарегистрированные
+	// записаны в верхнем. «-m get» уходило дословно и получало 400 или 501 —
+	// причём Go-сервер отдаёт запрос хендлеру с любым методом, так что
+	// локально прогон выглядел рабочим и ломался ровно при переезде на стенд.
+	method := strings.ToUpper(*f.method)
+
 	// Умолчание -c не должно спорить с -n: без этого «-n 10» отчитывается
 	// о пятидесяти потоках, из которых работали десять. Явное -c не трогаем —
 	// там человек сказал противоречие вслух, и Validate ответит ошибкой.
@@ -125,7 +132,7 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 
 	cfg := runner.Config{
 		URL:              fs.Arg(0),
-		Method:           *f.method,
+		Method:           method,
 		Body:             []byte(*f.body),
 		Headers:          f.headers.h,
 		Requests:         requests,
