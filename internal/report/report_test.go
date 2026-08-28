@@ -280,6 +280,26 @@ func TestProvenance(t *testing.T) {
 			t.Errorf("keep-alive выключен, но показан включённым:\n%s", off)
 		}
 	})
+
+	// Блок существует ради воспроизводимости, а по режиму и потокам
+	// не понять, заказывали -n или -z.
+	t.Run("режим -n", func(t *testing.T) {
+		out := render(sample(), Options{Width: wide,
+			Run: RunInfo{Config: runner.Config{Requests: 1000, Concurrency: 20}}})
+
+		if !strings.Contains(out, "1000 запросов") {
+			t.Errorf("объём прогона не показан:\n%s", out)
+		}
+	})
+
+	t.Run("режим -z", func(t *testing.T) {
+		out := render(sample(), Options{Width: wide,
+			Run: RunInfo{Config: runner.Config{Duration: 30 * time.Second, Concurrency: 20}}})
+
+		if !strings.Contains(out, "план") || !strings.Contains(out, "30s") {
+			t.Errorf("длительность прогона не показана:\n%s", out)
+		}
+	})
 }
 
 // Частичный результат, неотличимый от полного, — будущий скриншот в чате

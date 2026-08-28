@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Baklachok/loadgen/internal/runner"
 	"github.com/Baklachok/loadgen/internal/stats"
 )
 
@@ -26,6 +27,7 @@ func writeProvenance(w io.Writer, s stats.Summary, opt Options, p palette) {
 
 	row("loadgen", run.Version)
 	row("цель", fmt.Sprintf("%s %s", cfg.Method, cfg.URL))
+	row("план", runScope(cfg))
 	row("режим", runMode(cfg))
 	row("протокол", orUnknown(run.Proto))
 	row("keep-alive", yesNo(!cfg.DisableKeepAlive))
@@ -49,4 +51,14 @@ func yesNo(v bool) string {
 		return "да"
 	}
 	return "нет"
+}
+
+// runScope — сколько было заказано. Без него блок не выполняет своей задачи:
+// по «closed-loop, 20 потоков» не понять, был это -n 1000 или -z 30s, и
+// повторить прогон нельзя.
+func runScope(cfg runner.Config) string {
+	if cfg.Duration > 0 {
+		return cfg.Duration.String()
+	}
+	return fmt.Sprintf("%d запросов", cfg.Requests)
 }

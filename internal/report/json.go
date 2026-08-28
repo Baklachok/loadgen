@@ -26,65 +26,6 @@ import (
 // симметрии в момент её заморозки — худший из моментов.
 const schemaVersion = 1
 
-// Перцентили — указатели: на недостаточной выборке они уезжают в null.
-// Число здесь было бы такой же ложью, как в текстовом отчёте, только
-// потребитель у него автоматический и переспросить не может.
-type jsonLatencies struct {
-	Samples int      `json:"samples"`
-	MinMs   float64  `json:"min_ms"`
-	MeanMs  float64  `json:"mean_ms"`
-	P50Ms   *float64 `json:"p50_ms"`
-	P90Ms   *float64 `json:"p90_ms"`
-	P95Ms   *float64 `json:"p95_ms"`
-	P99Ms   *float64 `json:"p99_ms"`
-	MaxMs   float64  `json:"max_ms"`
-}
-
-type jsonBucket struct {
-	UpperMs float64 `json:"upper_ms"`
-	Count   int     `json:"count"`
-}
-
-// jsonPhase не обнуляет перцентили на малой выборке, в отличие от
-// jsonLatencies, и это не недосмотр. Фазы соединения по своей природе
-// измеряются единицами замеров: при keep-alive рукопожатие делает только
-// первый запрос. Обнулить их значило бы не показать ничего и никогда.
-// Вместо этого рядом всегда стоит samples — читатель видит, что число
-// посчитано по двум замерам, и сам решает, что оно стоит.
-type jsonPhase struct {
-	Samples int     `json:"samples"`
-	P50Ms   float64 `json:"p50_ms"`
-	P90Ms   float64 `json:"p90_ms"`
-	P99Ms   float64 `json:"p99_ms"`
-	MaxMs   float64 `json:"max_ms"`
-}
-
-type jsonTrace struct {
-	Traced  int       `json:"traced"`
-	Reused  int       `json:"reused"`
-	DNS     jsonPhase `json:"dns"`
-	Connect jsonPhase `json:"connect"`
-	TLS     jsonPhase `json:"tls"`
-	TTFB    jsonPhase `json:"ttfb"`
-}
-
-// jsonConfig — те же поля, что в блоке «Прогон» текстового отчёта.
-// Без них сохранённый JSON через полгода не воспроизвести.
-type jsonConfig struct {
-	Version     string  `json:"version"`
-	URL         string  `json:"url"`
-	Method      string  `json:"method"`
-	Requests    int     `json:"requests"`
-	DurationMs  float64 `json:"duration_ms"`
-	Concurrency int     `json:"concurrency"`
-	Rate        float64 `json:"rate"`
-	TimeoutMs   float64 `json:"timeout_ms"`
-	KeepAlive   bool    `json:"keepalive"`
-	Proto       string  `json:"proto"`
-	GOMAXPROCS  int     `json:"gomaxprocs"`
-	StartedAt   string  `json:"started_at"`
-}
-
 type jsonSummary struct {
 	Schema int        `json:"schema"`
 	Config jsonConfig `json:"config"`
@@ -127,13 +68,80 @@ type jsonSummary struct {
 	Errors    map[stats.ErrorKind]int `json:"errors"`
 }
 
+// Перцентили — указатели: на недостаточной выборке они уезжают в null.
+// Число здесь было бы такой же ложью, как в текстовом отчёте, только
+// потребитель у него автоматический и переспросить не может.
+type jsonLatencies struct {
+	Samples int      `json:"samples"`
+	MinMs   float64  `json:"min_ms"`
+	MeanMs  float64  `json:"mean_ms"`
+	P50Ms   *float64 `json:"p50_ms"`
+	P90Ms   *float64 `json:"p90_ms"`
+	P95Ms   *float64 `json:"p95_ms"`
+	P99Ms   *float64 `json:"p99_ms"`
+	MaxMs   float64  `json:"max_ms"`
+}
+
+type jsonBucket struct {
+	UpperMs float64 `json:"upper_ms"`
+	Count   int     `json:"count"`
+}
+
+// jsonPhase не обнуляет перцентили на малой выборке, в отличие от
+// jsonLatencies, и это не недосмотр. Фазы соединения по своей природе
+// измеряются единицами замеров: при keep-alive рукопожатие делает только
+// первый запрос. Обнулить их значило бы не показать ничего и никогда.
+// Вместо этого рядом всегда стоит samples — читатель видит, что число
+// посчитано по двум замерам, и сам решает, что оно стоит.
+type jsonPhase struct {
+	Samples int     `json:"samples"`
+	P50Ms   float64 `json:"p50_ms"`
+	P90Ms   float64 `json:"p90_ms"`
+	P99Ms   float64 `json:"p99_ms"`
+	MaxMs   float64 `json:"max_ms"`
+}
+
+type jsonTrace struct {
+	Traced  int       `json:"traced"`
+	Reused  int       `json:"reused"`
+	DNS     jsonPhase `json:"dns"`
+	Connect jsonPhase `json:"connect"`
+	TLS     jsonPhase `json:"tls"`
+	TTFB    jsonPhase `json:"ttfb"`
+}
+
+// jsonConfig — то, что заказывали: те же поля, что в блоке «Прогон»
+// текстового отчёта. Без них сохранённый JSON через полгода не воспроизвести.
+//
+// Длительности прогона здесь нет намеренно: elapsed_ms лежит на верхнем
+// уровне, потому что это результат, а не настройка. Текстовый блок мешает
+// их в одну таблицу — человеку так удобнее, машине нет.
+type jsonConfig struct {
+	Version     string  `json:"version"`
+	URL         string  `json:"url"`
+	Method      string  `json:"method"`
+	Requests    int     `json:"requests"`
+	DurationMs  float64 `json:"duration_ms"`
+	Concurrency int     `json:"concurrency"`
+	Rate        float64 `json:"rate"`
+	TimeoutMs   float64 `json:"timeout_ms"`
+	KeepAlive   bool    `json:"keepalive"`
+	Proto       string  `json:"proto"`
+	GOMAXPROCS  int     `json:"gomaxprocs"`
+	StartedAt   string  `json:"started_at"`
+}
+
+// Конвертеры ниже названы единообразно — xxxJSON: «превратить внутренний тип
+// в кусок документа». Раньше они звались latencies, phase, buckets, traceJSON
+// и runConfig, и предсказать имя было нельзя.
+
 // ms переводит длительность в миллисекунды с точностью до микросекунды:
 // наносекунды в отчёте — шум, а float без округления даёт хвосты вида 5.000000001.
 func ms(d time.Duration) float64 {
 	return math.Round(float64(d)/float64(time.Microsecond)) / 1000
 }
 
-func latencies(l stats.Latencies) jsonLatencies {
+func latenciesJSON(l stats.Latencies) jsonLatencies {
 	// percentile отдаёт nil, когда замеров не хватило на осмысленное число.
 	percentile := func(d time.Duration, q float64) *float64 {
 		if !l.Reliable(q) {
@@ -155,7 +163,7 @@ func latencies(l stats.Latencies) jsonLatencies {
 	}
 }
 
-func phase(ph stats.PhaseStats) jsonPhase {
+func phaseJSON(ph stats.PhaseStats) jsonPhase {
 	return jsonPhase{
 		Samples: ph.Samples,
 		P50Ms:   ms(ph.P50),
@@ -176,7 +184,7 @@ func writeJSON(w io.Writer, s stats.Summary, opt Options) error {
 func summaryJSON(s stats.Summary, opt Options) jsonSummary {
 	out := jsonSummary{
 		Schema:        schemaVersion,
-		Config:        runConfig(opt.Run),
+		Config:        configJSON(opt.Run),
 		Total:         s.Total,
 		Warmup:        s.Warmup,
 		Partial:       s.Partial,
@@ -194,8 +202,8 @@ func summaryJSON(s stats.Summary, opt Options) jsonSummary {
 		LateShare:     s.LateShare(),
 		BytesRead:     s.BytesRead,
 		ThroughputMBs: s.Throughput,
-		Latency:       latencies(s.Latency),
-		Histogram:     buckets(s.Histogram),
+		Latency:       latenciesJSON(s.Latency),
+		Histogram:     bucketsJSON(s.Histogram),
 		Codes:         s.Codes,
 		Errors:        s.Errors,
 		Trace:         traceJSON(s.Trace),
@@ -203,7 +211,7 @@ func summaryJSON(s stats.Summary, opt Options) jsonSummary {
 
 	// В closed-loop расписания не было, и поправка к нему бессмысленна.
 	if opt.OpenLoop {
-		corrected := latencies(s.Corrected)
+		corrected := latenciesJSON(s.Corrected)
 		lag := ms(s.MaxLag)
 		out.Corrected, out.MaxLagMs = &corrected, &lag
 	}
@@ -213,7 +221,7 @@ func summaryJSON(s stats.Summary, opt Options) jsonSummary {
 
 // buckets возвращает пустой слайс, а не nil: в JSON это [] вместо null,
 // и потребителю не нужна отдельная ветка на «гистограммы не было».
-func buckets(src []stats.Bucket) []jsonBucket {
+func bucketsJSON(src []stats.Bucket) []jsonBucket {
 	out := make([]jsonBucket, 0, len(src))
 	for _, b := range src {
 		out = append(out, jsonBucket{UpperMs: ms(b.Upper), Count: b.Count})
@@ -230,14 +238,14 @@ func traceJSON(t *stats.TraceSummary) *jsonTrace {
 	return &jsonTrace{
 		Traced:  t.Traced,
 		Reused:  t.Reused,
-		DNS:     phase(t.DNS),
-		Connect: phase(t.Connect),
-		TLS:     phase(t.TLS),
-		TTFB:    phase(t.TTFB),
+		DNS:     phaseJSON(t.DNS),
+		Connect: phaseJSON(t.Connect),
+		TLS:     phaseJSON(t.TLS),
+		TTFB:    phaseJSON(t.TTFB),
 	}
 }
 
-func runConfig(run RunInfo) jsonConfig {
+func configJSON(run RunInfo) jsonConfig {
 	cfg := run.Config
 	return jsonConfig{
 		Version:     run.Version,
