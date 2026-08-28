@@ -29,12 +29,12 @@ const (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 // run принимает аргументы и потоки, а не читает глобальные: только так
 // контракт кодов выхода можно проверить тестом, а не руками.
-func run(args []string, stdout, stderr *os.File) int {
+func run(args []string, stdin, stdout, stderr *os.File) int {
 	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	f := newFlags(fs, stderr)
@@ -61,6 +61,12 @@ func run(args []string, stdout, stderr *os.File) int {
 	cfg, err := f.config(fs)
 	if err != nil {
 		fmt.Fprintln(stderr, "ошибка:", err)
+		return exitUsage
+	}
+
+	// Спрашиваем до шапки: «Запуск 50000 запросов к …» не должно опережать
+	// вопрос о том, можно ли вообще туда стрелять.
+	if !permitted(cfg, *f.yes, stdin, stderr) {
 		return exitUsage
 	}
 

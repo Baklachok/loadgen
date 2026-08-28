@@ -1,55 +1,12 @@
 package main
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 )
-
-// capture прогоняет run с подменёнными потоками и возвращает всё сразу:
-// код, stdout и stderr.
-func capture(t *testing.T, args ...string) (code int, stdout, stderr string) {
-	t.Helper()
-
-	outR, outW := pipe(t)
-	errR, errW := pipe(t)
-
-	// По каналу на поток: общий не даёт понять, чья строка пришла первой.
-	outDone, errDone := drain(outR), drain(errR)
-
-	code = run(args, outW, errW)
-	outW.Close()
-	errW.Close()
-
-	return code, <-outDone, <-errDone
-}
-
-// pipe, а не bytes.Buffer: run принимает *os.File именно затем, чтобы
-// определение TTY работало по-настоящему. Труба терминалом не является,
-// и цвет в тестах выключается сам собой.
-func pipe(t *testing.T) (r, w *os.File) {
-	t.Helper()
-
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { r.Close() })
-	return r, w
-}
-
-func drain(r *os.File) <-chan string {
-	out := make(chan string, 1)
-	go func() {
-		b, _ := io.ReadAll(r)
-		out <- string(b)
-	}()
-	return out
-}
 
 func TestExitCodes(t *testing.T) {
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type flags struct {
 	insecure    *bool
 	noKeepAlive *bool
 	http2       *bool
+	yes         *bool
 	showVersion *bool
 
 	sloP99       *time.Duration
@@ -50,6 +52,7 @@ func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
 		insecure:    fs.Bool("insecure", false, "не проверять TLS-сертификат"),
 		noKeepAlive: fs.Bool("disable-keepalive", false, "новое соединение на каждый запрос"),
 		http2:       fs.Bool("http2", false, "разрешить HTTP/2"),
+		yes:         fs.Bool("yes", false, "не спрашивать подтверждения для не-локальной цели"),
 		showVersion: fs.Bool("version", false, "показать версию"),
 
 		sloP99:       fs.Duration("slo-p99", 0, "порог приёмки: p99 не выше указанного, иначе код 3"),
@@ -122,6 +125,17 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 	// локально прогон выглядел рабочим и ломался ровно при переезде на стенд.
 	method := strings.ToUpper(*f.method)
 
+	// Подпись обязательна, но явный -H 'User-Agent: ...' её побеждает:
+	// сервис может ключеваться на UA, и запретить это значило бы сломать
+	// законный сценарий ради формальности.
+	headers := f.headers.h
+	if headers.Get("User-Agent") == "" {
+		if headers == nil {
+			headers = make(http.Header)
+		}
+		headers.Set("User-Agent", userAgent())
+	}
+
 	// Умолчание -c не должно спорить с -n: без этого «-n 10» отчитывается
 	// о пятидесяти потоках, из которых работали десять. Явное -c не трогаем —
 	// там человек сказал противоречие вслух, и Validate ответит ошибкой.
@@ -134,7 +148,7 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 		URL:              fs.Arg(0),
 		Method:           method,
 		Body:             []byte(*f.body),
-		Headers:          f.headers.h,
+		Headers:          headers,
 		Requests:         requests,
 		Duration:         *f.z,
 		Concurrency:      concurrency,
