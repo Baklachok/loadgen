@@ -10,6 +10,11 @@ import (
 	"github.com/Baklachok/loadgen/internal/stats"
 )
 
+// wide — ширина, при которой ничего не переносится. Тесты, которым ширина
+// безразлична, берут её: разнобой 80/100 наводил на мысль, будто разница
+// что-то значит.
+const wide = 100
+
 func millis(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 
 // render отдаёт весь текстовый отчёт строкой: тестам интересна не запись

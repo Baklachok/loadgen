@@ -6,19 +6,20 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Baklachok/loadgen/internal/runner"
 	"github.com/Baklachok/loadgen/internal/stats"
 )
 
 // Цвет включается только там, где его увидит человек.
 func TestColorOutput(t *testing.T) {
 	t.Run("выключен — ни одного ANSI-кода", func(t *testing.T) {
-		if strings.ContainsRune(render(sample(), Options{Color: false, Width: 80}), '\x1b') {
+		if strings.ContainsRune(render(sample(), Options{Color: false, Width: wide}), '\x1b') {
 			t.Error("в выводе есть ANSI-коды при Color=false — они уедут в пайп")
 		}
 	})
 
 	t.Run("включён — раскраска есть", func(t *testing.T) {
-		if !strings.ContainsRune(render(sample(), Options{Color: true, Width: 80}), '\x1b') {
+		if !strings.ContainsRune(render(sample(), Options{Color: true, Width: wide}), '\x1b') {
 			t.Error("Color=true, но раскраски нет")
 		}
 	})
@@ -74,7 +75,7 @@ func TestHistogramBlock(t *testing.T) {
 		}
 
 		var bars []int
-		for _, line := range strings.Split(render(s, Options{Width: 80}), "\n") {
+		for _, line := range strings.Split(render(s, Options{Width: wide}), "\n") {
 			if strings.Contains(line, "[") && strings.Contains(line, "ms") {
 				bars = append(bars, strings.Count(line, "█"))
 			}
@@ -98,10 +99,10 @@ func TestTraceBlock(t *testing.T) {
 	t.Run("только при включённой трассировке", func(t *testing.T) {
 		const marker = "Фазы соединения"
 
-		if strings.Contains(render(sample(), Options{Width: 80}), marker) {
+		if strings.Contains(render(sample(), Options{Width: wide}), marker) {
 			t.Error("блок фаз печатается без -trace")
 		}
-		if !strings.Contains(render(traced(), Options{Width: 80}), marker) {
+		if !strings.Contains(render(traced(), Options{Width: wide}), marker) {
 			t.Error("блок фаз пропал при включённой трассировке")
 		}
 	})
@@ -109,7 +110,7 @@ func TestTraceBlock(t *testing.T) {
 	// Пустая фаза должна быть видна как прочерк: ноль замеров и «0ms» —
 	// разные утверждения, и путать их нельзя.
 	t.Run("пустая фаза — прочерк, а не ноль", func(t *testing.T) {
-		for _, line := range strings.Split(render(traced(), Options{Width: 80}), "\n") {
+		for _, line := range strings.Split(render(traced(), Options{Width: wide}), "\n") {
 			if !strings.Contains(line, "TLS handshake") {
 				continue
 			}
@@ -124,7 +125,7 @@ func TestTraceBlock(t *testing.T) {
 	// Колонка «замеров» — главное в этом блоке: без неё p99 по двум замерам
 	// выглядит так же солидно, как p99 по тысяче.
 	t.Run("число замеров рядом с перцентилями", func(t *testing.T) {
-		out := render(traced(), Options{Width: 100})
+		out := render(traced(), Options{Width: wide})
 
 		for _, want := range []string{"замеров", "998 из 1000"} {
 			if !strings.Contains(out, want) {
@@ -138,7 +139,7 @@ func TestTraceBlock(t *testing.T) {
 		s := traced()
 		s.Trace.Reused = 0
 
-		out := render(s, Options{Width: 100})
+		out := render(s, Options{Width: wide})
 		if strings.Contains(out, "0 из") {
 			t.Error("напечатано «0 из N взяли соединение из пула»")
 		}
@@ -158,7 +159,7 @@ func TestTotals(t *testing.T) {
 			Codes: map[int]int{429: 12500},
 		}
 
-		out := render(s, Options{Width: 100})
+		out := render(s, Options{Width: wide})
 
 		if !strings.Contains(out, "0 (0.0%)") {
 			t.Errorf("доли 2xx нет в шапке:\n%s", out)
@@ -177,14 +178,14 @@ func TestTotals(t *testing.T) {
 	t.Run("прогрев показан, только если он был", func(t *testing.T) {
 		const marker = "Прогрев:"
 
-		if strings.Contains(render(sample(), Options{Width: 100}), marker) {
+		if strings.Contains(render(sample(), Options{Width: wide}), marker) {
 			t.Error("строка прогрева печатается, хотя прогрева не было")
 		}
 
 		s := sample()
 		s.Warmup = 100
 
-		out := render(s, Options{Width: 100})
+		out := render(s, Options{Width: wide})
 		if !strings.Contains(out, marker) || !strings.Contains(out, "100 отброшено") {
 			t.Errorf("прогрев не показан в шапке:\n%s", out)
 		}
@@ -199,14 +200,14 @@ func TestTotals(t *testing.T) {
 		// не должно именно поэтому, а не из-за точного равенства.
 		same := sample()
 		same.Elapsed, same.Window = 2*time.Second, 2*time.Second-317*time.Microsecond
-		if strings.Contains(render(same, Options{Width: 100}), marker) {
+		if strings.Contains(render(same, Options{Width: wide}), marker) {
 			t.Error("окно напечатано, хотя прогрева не было")
 		}
 
 		shortened := sample()
 		shortened.Warmup = 50
 		shortened.Elapsed, shortened.Window = 6*time.Second, time.Second
-		out := render(shortened, Options{Width: 100})
+		out := render(shortened, Options{Width: wide})
 
 		if !strings.Contains(out, marker) {
 			t.Errorf("окно не показано, хотя короче прогона:\n%s", out)
@@ -219,13 +220,13 @@ func TestTotals(t *testing.T) {
 	t.Run("достигнутая частота рядом с заданной", func(t *testing.T) {
 		closed := sample()
 		closed.RPS = 1500
-		if out := render(closed, Options{Width: 100}); strings.Contains(out, "заданных") {
+		if out := render(closed, Options{Width: wide}); strings.Contains(out, "заданных") {
 			t.Error("в closed-loop не с чем сравнивать, а цель напечатана")
 		}
 
 		open := sample()
 		open.TargetRate, open.RPS = 1000, 995 // недобор полпроцента — шум
-		out := render(open, Options{Width: 100})
+		out := render(open, Options{Width: wide})
 
 		if !strings.Contains(out, "995.0 из 1000 заданных") {
 			t.Errorf("достигнутое не поставлено рядом с заданным:\n%s", out)
@@ -241,7 +242,7 @@ func TestTotals(t *testing.T) {
 		s := sample()
 		s.TargetRate, s.RPS = 1000, 480
 
-		out := render(s, Options{Width: 100})
+		out := render(s, Options{Width: wide})
 
 		if !strings.Contains(out, "(−52%)") {
 			t.Errorf("недобор не показан рядом с числом:\n%s", out)
@@ -259,10 +260,10 @@ func TestTotals(t *testing.T) {
 func TestCorrectedBlockOnlyInOpenLoop(t *testing.T) {
 	const marker = "поправкой на расписание"
 
-	if strings.Contains(render(sample(), Options{Width: 80}), marker) {
+	if strings.Contains(render(sample(), Options{Width: wide}), marker) {
 		t.Error("closed-loop: блок с поправкой не должен печататься — расписания не было")
 	}
-	if !strings.Contains(render(sample(), Options{Width: 80, OpenLoop: true}), marker) {
+	if !strings.Contains(render(sample(), Options{Width: wide, OpenLoop: true}), marker) {
 		t.Error("open-loop: блок с поправкой пропал")
 	}
 }
@@ -276,7 +277,7 @@ func TestRateWarningNamesTheCauseWhenKnown(t *testing.T) {
 		s.TargetRate, s.RPS = 2000, 500
 		s.Total, s.Late, s.MaxLag = 1000, 800, 250*time.Millisecond
 
-		out := render(s, Options{Width: 100})
+		out := render(s, Options{Width: wide})
 
 		if !strings.Contains(out, "не успевали уходить") {
 			t.Errorf("причина не названа, хотя 80%% опоздали:\n%s", out)
@@ -291,7 +292,7 @@ func TestRateWarningNamesTheCauseWhenKnown(t *testing.T) {
 		s.TargetRate, s.RPS = 2000, 500
 		s.Total, s.Late = 1000, 0
 
-		out := render(s, Options{Width: 100})
+		out := render(s, Options{Width: wide})
 
 		if strings.Contains(out, "не успевали уходить") {
 			t.Error("генератор назначен виноватым без единого опоздания")
@@ -311,7 +312,7 @@ func TestSmallSampleHidesPercentiles(t *testing.T) {
 	s := sample()
 	s.Latency.Samples = 50
 
-	out := render(s, Options{Width: 100})
+	out := render(s, Options{Width: wide})
 
 	if !strings.Contains(out, "50 замеров") {
 		t.Errorf("в заголовке нет числа замеров:\n%s", out)
@@ -332,7 +333,7 @@ func TestSmallSampleHidesPercentiles(t *testing.T) {
 }
 
 func TestFullSampleShowsEveryPercentile(t *testing.T) {
-	out := render(sample(), Options{Width: 100})
+	out := render(sample(), Options{Width: wide})
 
 	if strings.Contains(out, "—") && strings.Contains(out, "мало данных") {
 		t.Errorf("прочерки на достаточной выборке:\n%s", out)
@@ -348,7 +349,7 @@ func TestDashedPercentilesAreAllExplained(t *testing.T) {
 	s := sample()
 	s.Latency.Samples = 150 // хватает на p50 и p90, не хватает на p95 и p99
 
-	out := render(s, Options{Width: 100})
+	out := render(s, Options{Width: wide})
 
 	for _, q := range stats.Quantiles {
 		dashed := strings.Contains(out, q.Name+"  —")
@@ -358,5 +359,64 @@ func TestDashedPercentilesAreAllExplained(t *testing.T) {
 			t.Errorf("%s: прочерк=%v, пояснение=%v — строка и сноска разошлись\n%s",
 				q.Name, dashed, explained, out)
 		}
+	}
+}
+
+// Отчёт живёт дольше, чем память о том, как его получили: без этих полей
+// через полгода прогон не повторить.
+func TestProvenanceBlock(t *testing.T) {
+	opt := Options{
+		Width: wide,
+		Run: RunInfo{
+			Version:   "v0.1.1",
+			Proto:     "HTTP/1.1",
+			StartedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+			Config: runner.Config{
+				URL: "http://example/api", Method: "POST",
+				Requests: 1000, Concurrency: 20, Timeout: 7 * time.Second,
+			},
+		},
+	}
+
+	out := render(sample(), opt)
+
+	for _, want := range []string{
+		"v0.1.1", "POST http://example/api", "closed-loop, 20 потоков",
+		"HTTP/1.1", "keep-alive", "7s", "GOMAXPROCS", "2026-08-28T12:00:00Z",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("в блоке «Прогон» нет %q:\n%s", want, out)
+		}
+	}
+}
+
+// Пустой протокол значит «ни один ответ не пришёл» — это другое утверждение,
+// чем «HTTP/1.1», и выглядеть должно иначе, а не пустотой.
+func TestProvenanceMarksUnknownProto(t *testing.T) {
+	out := render(sample(), Options{Width: wide, Run: RunInfo{Version: "dev"}})
+
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "протокол") {
+			if !strings.Contains(line, "—") {
+				t.Errorf("неизвестный протокол показан как %q", strings.TrimSpace(line))
+			}
+			return
+		}
+	}
+	t.Error("строки протокола нет вовсе")
+}
+
+// keep-alive выключается флагом, и в отчёте это должно быть видно: иначе
+// два прогона с разными цифрами выглядят необъяснимо.
+func TestProvenanceShowsKeepAlive(t *testing.T) {
+	on := render(sample(), Options{Width: wide, Run: RunInfo{}})
+	off := render(sample(), Options{Width: wide,
+		Run: RunInfo{Config: runner.Config{DisableKeepAlive: true}}})
+
+	if !strings.Contains(on, "keep-alive    да") {
+		t.Errorf("keep-alive включён, но не показан:\n%s", on)
+	}
+	if !strings.Contains(off, "keep-alive    нет") {
+		t.Errorf("keep-alive выключен, но показан включённым:\n%s", off)
 	}
 }

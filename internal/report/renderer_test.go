@@ -32,9 +32,9 @@ func TestNewRenderer(t *testing.T) {
 // одна лишняя строка шапки ломает `| jq`.
 func TestJSONRendererPrintsNoHeader(t *testing.T) {
 	var buf strings.Builder
-	cfg := runner.Config{URL: "http://example", Requests: 10, Concurrency: 2}
+	opt := Options{Run: RunInfo{Config: runner.Config{URL: "http://example", Requests: 10, Concurrency: 2}}}
 
-	if err := (jsonRenderer{}).Header(&buf, cfg, Options{}); err != nil {
+	if err := (jsonRenderer{}).Header(&buf, opt); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() != 0 {
@@ -44,9 +44,9 @@ func TestJSONRendererPrintsNoHeader(t *testing.T) {
 
 func TestTextRendererPrintsHeader(t *testing.T) {
 	var buf strings.Builder
-	cfg := runner.Config{URL: "http://example", Requests: 10, Concurrency: 2}
+	opt := Options{Run: RunInfo{Config: runner.Config{URL: "http://example", Requests: 10, Concurrency: 2}}}
 
-	if err := (textRenderer{}).Header(&buf, cfg, Options{}); err != nil {
+	if err := (textRenderer{}).Header(&buf, opt); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "http://example") {

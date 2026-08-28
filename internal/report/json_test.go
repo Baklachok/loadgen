@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Baklachok/loadgen/internal/runner"
 	"github.com/Baklachok/loadgen/internal/stats"
 )
 
@@ -206,5 +207,52 @@ func TestJSONNullsUnreliablePercentiles(t *testing.T) {
 	// max — не перцентиль, он остаётся числом при любой выборке
 	if got.Latency.MaxMs != 90 {
 		t.Errorf("max_ms = %v, ожидалось 90", got.Latency.MaxMs)
+	}
+}
+
+func TestJSONReportsConfig(t *testing.T) {
+	opt := Options{Run: RunInfo{
+		Version:   "v0.1.1",
+		Proto:     "HTTP/2.0",
+		StartedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+		Config: runner.Config{
+			URL: "http://example/api", Method: "POST",
+			Requests: 1000, Concurrency: 20, Rate: 500,
+			Timeout: 7 * time.Second, DisableKeepAlive: true,
+		},
+	}}
+
+	var got struct {
+		Config struct {
+			Version     string  `json:"version"`
+			URL         string  `json:"url"`
+			Method      string  `json:"method"`
+			Requests    int     `json:"requests"`
+			Concurrency int     `json:"concurrency"`
+			Rate        float64 `json:"rate"`
+			TimeoutMs   float64 `json:"timeout_ms"`
+			KeepAlive   bool    `json:"keepalive"`
+			Proto       string  `json:"proto"`
+			GOMAXPROCS  int     `json:"gomaxprocs"`
+			StartedAt   string  `json:"started_at"`
+		} `json:"config"`
+	}
+	decodeJSON(t, sample(), opt, &got)
+
+	c := got.Config
+	if c.Version != "v0.1.1" || c.URL != "http://example/api" || c.Method != "POST" {
+		t.Errorf("цель и версия: %+v", c)
+	}
+	if c.Requests != 1000 || c.Concurrency != 20 || c.Rate != 500 || c.TimeoutMs != 7000 {
+		t.Errorf("флаги прогона: %+v", c)
+	}
+	if c.KeepAlive {
+		t.Error("keepalive=true при -disable-keepalive")
+	}
+	if c.Proto != "HTTP/2.0" || c.StartedAt != "2026-08-28T12:00:00Z" {
+		t.Errorf("протокол и время: proto=%q started_at=%q", c.Proto, c.StartedAt)
+	}
+	if c.GOMAXPROCS < 1 {
+		t.Errorf("gomaxprocs = %d", c.GOMAXPROCS)
 	}
 }
