@@ -1,0 +1,110 @@
+{
+  "schema": 2,
+  "config": {
+    "version": "v0.2.0",
+    "url": "http://localhost:8080/",
+    "method": "GET",
+    "requests": 1000,
+    "duration_ms": 0,
+    "concurrency": 50,
+    "rate": 500,
+    "timeout_ms": 10000,
+    "keepalive": true,
+    "proto": "HTTP/1.1",
+    "gomaxprocs": 8,
+    "started_at": "2026-08-28T12:00:00Z"
+  },
+  "total": 100,
+  "warmup_discarded": 0,
+  "partial": false,
+  "ok": 90,
+  "non_2xx": 8,
+  "failed": 2,
+  "truncated": 0,
+  "client_errors": 0,
+  "success_rate": 0.9,
+  "elapsed_ms": 2000,
+  "window_ms": 0,
+  "rps": 49,
+  "target_rate": 0,
+  "rate_shortfall": 0,
+  "late": 0,
+  "late_share": 0,
+  "bytes_read": 4096,
+  "throughput_mb_s": 0.002,
+  "latency": {
+    "samples": 2000,
+    "min_ms": 1.235,
+    "mean_ms": 5.5,
+    "p50_ms": 4,
+    "p90_ms": 9,
+    "p95_ms": 30,
+    "p99_ms": 80,
+    "max_ms": 90
+  },
+  "corrected": {
+    "samples": 2000,
+    "min_ms": 1,
+    "mean_ms": 9,
+    "p50_ms": 5,
+    "p90_ms": 40,
+    "p95_ms": 70,
+    "p99_ms": 110.499,
+    "max_ms": 120
+  },
+  "max_lag_ms": 30,
+  "trace": {
+    "traced": 1000,
+    "reused": 998,
+    "dns": {
+      "samples": 2,
+      "p50_ms": 1,
+      "p90_ms": 0,
+      "p99_ms": 3,
+      "max_ms": 3
+    },
+    "connect": {
+      "samples": 2,
+      "p50_ms": 1,
+      "p90_ms": 0,
+      "p99_ms": 2,
+      "max_ms": 2
+    },
+    "tls": {
+      "samples": 0,
+      "p50_ms": 0,
+      "p90_ms": 0,
+      "p99_ms": 0,
+      "max_ms": 0
+    },
+    "ttfb": {
+      "samples": 1000,
+      "p50_ms": 6,
+      "p90_ms": 0,
+      "p99_ms": 400,
+      "max_ms": 450
+    }
+  },
+  "histogram": [
+    {
+      "upper_ms": 10,
+      "count": 80
+    },
+    {
+      "upper_ms": 20,
+      "count": 3
+    },
+    {
+      "upper_ms": 120,
+      "count": 15
+    }
+  ],
+  "codes": {
+    "200": 90,
+    "404": 5,
+    "503": 3
+  },
+  "errors": {
+    "timeout": 2
+  }
+}

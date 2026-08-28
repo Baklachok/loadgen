@@ -32,8 +32,7 @@
 go install github.com/Baklachok/loadgen/cmd/loadgen@latest
 
 # из исходников, с версией внутри бинарника
-git clone https://github.com/Baklachok/loadgen && cd loadgen
-go build -ldflags "-X main.version=$(git describe --tags --always --dirty)" -o bin/loadgen ./cmd/loadgen
+git clone https://github.com/Baklachok/loadgen && cd loadgen && make build
 ```
 
 ## Использование
@@ -194,35 +193,12 @@ internal/report/  представление: текст с цветами и г
 ```bash
 make build    # bin/loadgen с версией из git describe
 make test     # go test -race ./...
+make smoke    # собранный бинарник против заглушки: числа и коды выхода
 make lint     # golangci-lint: govet, staticcheck, gosec, bodyclose, gofmt
+make demo     # перезаписать assets/demo.gif (нужны asciinema и agg)
 make cross    # dist/: linux, darwin, windows — amd64 и arm64
 ```
 
 ## Лицензия
 
 MIT — см. [LICENSE](LICENSE).
-
-<!--
-Перезаписать демо-гифку:
-
-  sudo apt install asciinema
-  asciinema rec demo.cast --cols 100 --rows 50
-
-  # agg только бинарником из релизов, для других платформ:
-  # https://github.com/asciinema/agg/releases
-  curl -sSL -o ~/.local/bin/agg \
-    https://github.com/asciinema/agg/releases/latest/download/agg-x86_64-unknown-linux-gnu
-  chmod +x ~/.local/bin/agg
-
-  agg --idle-time-limit 1 demo.cast assets/demo.gif
-
-Что печатать после старта записи:
-
-  loadgen -z 3s -c 20 http://localhost:8080
-  loadgen -z 3s -rate 2500 -c 400 http://localhost:8080
-  exit
-
-Ширина 100 обязательна: отчёт под неё свёрстан, на 80 бары схлопываются с 81 блока
-до 60. Высота 50 вмещает closed-loop отчёт целиком (46 строк), open-loop прокрутится.
-Высоту пересматривать при каждом новом блоке: первой записи хватало 38 строк.
--->

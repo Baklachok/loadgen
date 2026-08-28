@@ -13,13 +13,18 @@ os   = $(word 1,$(subst /, ,$1))
 arch = $(word 2,$(subst /, ,$1))
 ext  = $(if $(findstring windows,$1),.exe)
 
-.PHONY: build test lint fmt cross clean $(PLATFORMS)
+.PHONY: build test smoke lint fmt demo cross clean $(PLATFORMS)
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/loadgen
 
 test:
 	go test -race ./...
+
+# Юнит-тесты зовут run() внутри процесса. Смоук проверяет то, чего они
+# не видят: что сборка даёт работающую программу с верными кодами выхода.
+smoke:
+	./scripts/smoke.sh
 
 lint:
 	@command -v golangci-lint >/dev/null || { \
@@ -31,7 +36,12 @@ lint:
 fmt:
 	$(GOFMT) -w ./cmd ./internal
 
-# Пять бинарников из одной команды. -s -w срезают отладочную информацию:
+# Демо-гифка для README. Раньше писалась руками и поэтому отставала от отчёта;
+# нужны asciinema и agg — скрипт скажет, если их нет.
+demo:
+	./scripts/demo.sh
+
+# Шесть бинарников из одной команды. -s -w срезают отладочную информацию:
 # для релизных сборок это примерно четверть размера.
 cross: $(PLATFORMS)
 

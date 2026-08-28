@@ -3,7 +3,6 @@ package runner
 import (
 	"context"
 	"net/http"
-	"runtime"
 	"testing"
 	"time"
 )
@@ -122,31 +121,6 @@ func TestOpenLoopNoLagWhenKeepingUp(t *testing.T) {
 	}
 }
 
-func TestNoGoroutineLeak(t *testing.T) {
-	srv := sleepServer(t, 0)
-
-	openLoopCfg := durationConfig(srv, 300*time.Millisecond)
-	openLoopCfg.Rate = 200
-	openLoopCfg.Concurrency = 10
-
-	closedLoopCfg := durationConfig(srv, 300*time.Millisecond)
-	closedLoopCfg.Concurrency = 10
-
-	for name, cfg := range map[string]Config{"closed-loop": closedLoopCfg, "open-loop": openLoopCfg} {
-		t.Run(name, func(t *testing.T) {
-			before := runtime.NumGoroutine()
-			mustRun(t, context.Background(), cfg)
-
-			time.Sleep(300 * time.Millisecond) // дать транспорту закрыть простаивающие соединения
-			if after := runtime.NumGoroutine(); after > before {
-				t.Errorf("утечка горутин: было %d, стало %d", before, after)
-			}
-		})
-	}
-}
-
-// Дедлайн -z и сигнал — разные события: первый штатный конец прогона,
-// второй обрыв, и отчёт обязан их различать.
 func TestReportMarksInterruption(t *testing.T) {
 	srv := sleepServer(t, 5*time.Millisecond)
 

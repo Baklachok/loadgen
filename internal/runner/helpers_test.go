@@ -8,8 +8,19 @@ import (
 	"slices"
 	"sync"
 	"testing"
+
+	"go.uber.org/goleak"
 	"time"
 )
+
+// goleak проверяет каждый тест пакета, а не один специально написанный,
+// и печатает стек виновника вместо разницы двух чисел. Самописный
+// TestNoGoroutineLeak сравнивал runtime.NumGoroutine() через time.Sleep(300ms):
+// держался на догадке о том, сколько нужно транспорту, и молчал о том,
+// что именно утекло.
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 // serve поднимает настоящий сервер и сам его гасит. httptest вместо моков —
 // тесты гоняют живой HTTP по петле, вместе с keep-alive и разбором заголовков.
