@@ -24,20 +24,37 @@ func interruptible(stderr io.Writer, exit func(int)) (context.Context, func()) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// done будит наблюдателя на обычном выходе. Без него горутина остаётся
+	// висеть на <-signals навсегда: signal.Stop отписывает канал, но никого
+	// не будит. В бою это безобидно — процесс тут же завершается, — а в тестах
+	// каждый прогон оставлял припаркованную горутину, и goleak на ней и упёрся.
+	done := make(chan struct{})
+
 	go func() {
-		<-signals
+		select {
+		case <-signals:
+		case <-done:
+			return
+		}
 		fmt.Fprintln(stderr, "\nостановка, собираю результаты… (ещё раз Ctrl+C — выйти немедленно)")
 		cancel()
 
 		// Без этого зависший запрос делает Ctrl+C бесполезным, и пользователь
 		// уходит в kill -9, теряя все собранные результаты.
-		<-signals
+		select {
+		case <-signals:
+		case <-done:
+			return
+		}
 		fmt.Fprintln(stderr, "прервано")
 		exit(exitInterrupt)
 	}()
 
+	// Вызывается ровно один раз, через defer в run. Повторный вызов дал бы
+	// панику на втором close — sync.Once ради несуществующего сценария не берём.
 	return ctx, func() {
 		signal.Stop(signals)
+		close(done)
 		cancel()
 	}
 }
