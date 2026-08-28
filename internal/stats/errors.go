@@ -20,7 +20,20 @@ const (
 	ErrTLS       ErrorKind = "tls"
 	ErrCanceled  ErrorKind = "canceled"
 	ErrOtherKind ErrorKind = "other"
+
+	// Ошибки, означающие, что кончились ресурсы у нас, а не у сервиса.
+	// До этой правки они попадали в «other» наравне с чем угодно, хотя
+	// требуют прямо противоположных действий.
+	ErrFDLimit ErrorKind = "too many open files"
+	ErrNoPorts ErrorKind = "no ephemeral ports"
 )
+
+// ClientSide — причина в самом генераторе или его ОС. Такие ошибки означают,
+// что прогон измерил наш потолок, а не поведение сервиса, и остальные цифры
+// описывают не то, ради чего затевался тест.
+func (k ErrorKind) ClientSide() bool {
+	return k == ErrFDLimit || k == ErrNoPorts
+}
 
 func Classify(err error) ErrorKind {
 	switch {
@@ -32,6 +45,13 @@ func Classify(err error) ErrorKind {
 		return ErrRefused
 	case errors.Is(err, syscall.ECONNRESET):
 		return ErrReset
+
+	// EMFILE — предел процесса, ENFILE — предел системы; для отчёта это
+	// одно и то же: дескрипторы кончились.
+	case errors.Is(err, syscall.EMFILE), errors.Is(err, syscall.ENFILE):
+		return ErrFDLimit
+	case errors.Is(err, syscall.EADDRNOTAVAIL):
+		return ErrNoPorts
 	}
 
 	var dnsErr *net.DNSError

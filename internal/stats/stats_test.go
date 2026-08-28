@@ -3,41 +3,14 @@ package stats
 import (
 	"context"
 	"math"
+	"net"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/Baklachok/loadgen/internal/runner"
 )
-
-func TestPercentile(t *testing.T) {
-
-	tests := []struct {
-		name   string
-		sorted []time.Duration
-		p      float64
-		want   time.Duration
-	}{
-		{"empty", nil, 0.5, 0},
-		{"single p50", []time.Duration{ms(5)}, 0.50, ms(5)},
-		{"single p99", []time.Duration{ms(5)}, 0.99, ms(5)},
-		{"ten p50", tenMs(), 0.50, ms(5)},
-		{"ten p90", tenMs(), 0.90, ms(9)},
-		{"ten p95", tenMs(), 0.95, ms(10)},
-		{"ten p99", tenMs(), 0.99, ms(10)},
-		{"p0 is min", tenMs(), 0.0, ms(1)},
-		{"p1 is max", tenMs(), 1.0, ms(10)},
-		{"identical", []time.Duration{ms(3), ms(3), ms(3)}, 0.99, ms(3)},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := Percentile(tt.sorted, tt.p)
-			if got != tt.want {
-				t.Errorf("Percentile(%v, %.2f) = %v, want %v", tt.sorted, tt.p, got, tt.want)
-			}
-		})
-	}
-}
 
 func TestCompute(t *testing.T) {
 
@@ -391,71 +364,127 @@ func TestComputeRates(t *testing.T) {
 	})
 }
 
-// Перцентиль осмыслен примерно при n >= 10/(1-p): десять наблюдений в самом
-// хвосте. Иначе p99 — это просто максимум, названный красивым словом.
-func TestPercentileSufficiency(t *testing.T) {
-	t.Run("порог по правилу 10/(1-p)", func(t *testing.T) {
-		tests := []struct {
-			p    float64
-			want int
-		}{
-			{0.50, 20}, {0.90, 100}, {0.95, 200}, {0.99, 1000}, {0.999, 10000},
-		}
-		for _, tt := range tests {
-			if got := MinSamples(tt.p); got != tt.want {
-				t.Errorf("MinSamples(%v) = %d, ожидалось %d", tt.p, got, tt.want)
-			}
-		}
-	})
+// Ненулевой ClientErrors обесценивает весь прогон, поэтому считается отдельно
+// от прочих отказов.
+func TestComputeCountsClientErrors(t *testing.T) {
+	fdLimit := &net.OpError{Op: "dial", Err: os.NewSyscallError("socket", syscall.EMFILE)}
 
-	t.Run("на пятидесяти замерах достоверен только p50", func(t *testing.T) {
-		s := compute(repeat(50, resp(200, ms(5))), time.Second)
+	s := compute([]runner.Result{
+		failed(fdLimit, ms(1)),
+		failed(fdLimit, ms(1)),
+		failed(syscall.ECONNREFUSED, ms(1)),
+		resp(200, ms(5)),
+	}, time.Second)
 
-		if s.Latency.Samples != 50 {
-			t.Fatalf("Samples = %d, ожидалось 50", s.Latency.Samples)
-		}
-		if !s.Latency.Reliable(0.50) {
-			t.Error("p50 объявлен недостоверным на 50 замерах")
-		}
-		for _, q := range []float64{0.90, 0.95, 0.99} {
-			if s.Latency.Reliable(q) {
-				t.Errorf("p%.0f объявлен достоверным на 50 замерах", q*100)
-			}
-		}
-	})
-
-	t.Run("на тысяче достоверно всё", func(t *testing.T) {
-		s := compute(repeat(1000, resp(200, ms(5))), time.Second)
-
-		for _, q := range []float64{0.50, 0.90, 0.95, 0.99} {
-			if !s.Latency.Reliable(q) {
-				t.Errorf("p%.0f недостоверен на 1000 замерах", q*100)
-			}
-		}
-	})
+	if s.Failed != 3 {
+		t.Errorf("Failed = %d, ожидалось 3", s.Failed)
+	}
+	if s.ClientErrors != 2 {
+		t.Errorf("ClientErrors = %d, ожидалось 2: отказ в соединении — не наш лимит", s.ClientErrors)
+	}
+	if s.Errors[ErrFDLimit] != 2 {
+		t.Errorf("в разбивке %d дескрипторных ошибок", s.Errors[ErrFDLimit])
+	}
 }
 
-// Четыре почти одинаковых замыкания в таблице Quantiles — идеальное место
-// для копипасты: перепутать P95 и P99 глазами почти невозможно заметить.
-func TestQuantilesTable(t *testing.T) {
-	l := Latencies{P50: ms(1), P90: ms(2), P95: ms(3), P99: ms(4)}
-	want := map[string]time.Duration{"p50": ms(1), "p90": ms(2), "p95": ms(3), "p99": ms(4)}
+// Перцентили: сам расчёт, достаточность выборки и таблица квантилей.
+func TestPercentiles(t *testing.T) {
+	t.Run("расчёт по ближайшему рангу", func(t *testing.T) {
 
-	if len(Quantiles) != len(want) {
-		t.Fatalf("в таблице %d перцентилей, в проверке %d", len(Quantiles), len(want))
-	}
+		tests := []struct {
+			name   string
+			sorted []time.Duration
+			p      float64
+			want   time.Duration
+		}{
+			{"empty", nil, 0.5, 0},
+			{"single p50", []time.Duration{ms(5)}, 0.50, ms(5)},
+			{"single p99", []time.Duration{ms(5)}, 0.99, ms(5)},
+			{"ten p50", tenMs(), 0.50, ms(5)},
+			{"ten p90", tenMs(), 0.90, ms(9)},
+			{"ten p95", tenMs(), 0.95, ms(10)},
+			{"ten p99", tenMs(), 0.99, ms(10)},
+			{"p0 is min", tenMs(), 0.0, ms(1)},
+			{"p1 is max", tenMs(), 1.0, ms(10)},
+			{"identical", []time.Duration{ms(3), ms(3), ms(3)}, 0.99, ms(3)},
+		}
 
-	for _, q := range Quantiles {
-		expected, known := want[q.Name]
-		if !known {
-			t.Errorf("неизвестное имя %q в таблице", q.Name)
-			continue
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				got := Percentile(tt.sorted, tt.p)
+				if got != tt.want {
+					t.Errorf("Percentile(%v, %.2f) = %v, want %v", tt.sorted, tt.p, got, tt.want)
+				}
+			})
 		}
-		if got := q.Value(l); got != expected {
-			t.Errorf("%s достаёт %v, ожидалось %v — перепутан аксессор", q.Name, got, expected)
+	})
+
+	// Перцентиль осмыслен примерно при n >= 10/(1-p): десять наблюдений в самом
+	// хвосте. Иначе p99 — это просто максимум, названный красивым словом.
+	t.Run("сколько замеров нужно", func(t *testing.T) {
+		t.Run("порог по правилу 10/(1-p)", func(t *testing.T) {
+			tests := []struct {
+				p    float64
+				want int
+			}{
+				{0.50, 20}, {0.90, 100}, {0.95, 200}, {0.99, 1000}, {0.999, 10000},
+			}
+			for _, tt := range tests {
+				if got := MinSamples(tt.p); got != tt.want {
+					t.Errorf("MinSamples(%v) = %d, ожидалось %d", tt.p, got, tt.want)
+				}
+			}
+		})
+
+		t.Run("на пятидесяти замерах достоверен только p50", func(t *testing.T) {
+			s := compute(repeat(50, resp(200, ms(5))), time.Second)
+
+			if s.Latency.Samples != 50 {
+				t.Fatalf("Samples = %d, ожидалось 50", s.Latency.Samples)
+			}
+			if !s.Latency.Reliable(0.50) {
+				t.Error("p50 объявлен недостоверным на 50 замерах")
+			}
+			for _, q := range []float64{0.90, 0.95, 0.99} {
+				if s.Latency.Reliable(q) {
+					t.Errorf("p%.0f объявлен достоверным на 50 замерах", q*100)
+				}
+			}
+		})
+
+		t.Run("на тысяче достоверно всё", func(t *testing.T) {
+			s := compute(repeat(1000, resp(200, ms(5))), time.Second)
+
+			for _, q := range []float64{0.50, 0.90, 0.95, 0.99} {
+				if !s.Latency.Reliable(q) {
+					t.Errorf("p%.0f недостоверен на 1000 замерах", q*100)
+				}
+			}
+		})
+	})
+
+	// Четыре почти одинаковых замыкания в таблице Quantiles — идеальное место
+	// для копипасты: перепутать P95 и P99 глазами почти невозможно заметить.
+	t.Run("аксессоры таблицы не перепутаны", func(t *testing.T) {
+		l := Latencies{P50: ms(1), P90: ms(2), P95: ms(3), P99: ms(4)}
+		want := map[string]time.Duration{"p50": ms(1), "p90": ms(2), "p95": ms(3), "p99": ms(4)}
+
+		if len(Quantiles) != len(want) {
+			t.Fatalf("в таблице %d перцентилей, в проверке %d", len(Quantiles), len(want))
 		}
-		if q.Q <= 0 || q.Q >= 1 {
-			t.Errorf("%s: квантиль %v вне (0,1)", q.Name, q.Q)
+
+		for _, q := range Quantiles {
+			expected, known := want[q.Name]
+			if !known {
+				t.Errorf("неизвестное имя %q в таблице", q.Name)
+				continue
+			}
+			if got := q.Value(l); got != expected {
+				t.Errorf("%s достаёт %v, ожидалось %v — перепутан аксессор", q.Name, got, expected)
+			}
+			if q.Q <= 0 || q.Q >= 1 {
+				t.Errorf("%s: квантиль %v вне (0,1)", q.Name, q.Q)
+			}
 		}
-	}
+	})
 }

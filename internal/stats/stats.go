@@ -18,6 +18,10 @@ type Summary struct {
 	NonOK  int // ответ получен, но не 2xx
 	Failed int // ответа не было: таймаут, обрыв, отказ в соединении
 
+	// ClientErrors — сколько из Failed приходится на исчерпание ресурсов
+	// самого генератора. Ненулевое значение обесценивает весь прогон.
+	ClientErrors int
+
 	// Elapsed — весь прогон, Window — окно измерения. С прогревом они
 	// расходятся, и RPS обязан считаться по Window: иначе числитель без
 	// прогрева делится на знаменатель с ним, и цифра занижается втрое.
@@ -165,8 +169,13 @@ func Compute(rep runner.Report) Summary {
 
 // recordError — ответа не было вовсе: таймаут, обрыв, отказ в соединении.
 func (s *Summary) recordError(err error) {
+	kind := Classify(err)
+
 	s.Failed++
-	s.Errors[Classify(err)]++
+	s.Errors[kind]++
+	if kind.ClientSide() {
+		s.ClientErrors++
+	}
 }
 
 // recordResponse — сервер ответил, и это результат независимо от кода.

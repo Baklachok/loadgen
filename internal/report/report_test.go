@@ -257,166 +257,206 @@ func TestTotals(t *testing.T) {
 	})
 }
 
-func TestCorrectedBlockOnlyInOpenLoop(t *testing.T) {
-	const marker = "поправкой на расписание"
+// Блок latency: поправка на расписание и отказ печатать перцентили,
+// на которые не набралось замеров.
+func TestLatencyBlock(t *testing.T) {
+	t.Run("поправка только в open-loop", func(t *testing.T) {
+		const marker = "поправкой на расписание"
 
-	if strings.Contains(render(sample(), Options{Width: wide}), marker) {
-		t.Error("closed-loop: блок с поправкой не должен печататься — расписания не было")
-	}
-	if !strings.Contains(render(sample(), Options{Width: wide, OpenLoop: true}), marker) {
-		t.Error("open-loop: блок с поправкой пропал")
-	}
-}
-
-// Массовые опоздания старта означают, что запросы не успевали уходить,
-// — это потолок генератора, а не медленный сервис. Пока данных на такой
-// вывод нет, предупреждение обязано честно называть обе версии.
-func TestRateWarningNamesTheCauseWhenKnown(t *testing.T) {
-	t.Run("опоздания массовые — виноват генератор", func(t *testing.T) {
-		s := sample()
-		s.TargetRate, s.RPS = 2000, 500
-		s.Total, s.Late, s.MaxLag = 1000, 800, 250*time.Millisecond
-
-		out := render(s, Options{Width: wide})
-
-		if !strings.Contains(out, "не успевали уходить") {
-			t.Errorf("причина не названа, хотя 80%% опоздали:\n%s", out)
+		if strings.Contains(render(sample(), Options{Width: wide}), marker) {
+			t.Error("closed-loop: блок с поправкой не должен печататься — расписания не было")
 		}
-		if !strings.Contains(out, "Опоздали:") || !strings.Contains(out, "800 (80%)") {
-			t.Errorf("счётчик опозданий не показан:\n%s", out)
+		if !strings.Contains(render(sample(), Options{Width: wide, OpenLoop: true}), marker) {
+			t.Error("open-loop: блок с поправкой пропал")
 		}
 	})
 
-	t.Run("опозданий нет — обе версии остаются", func(t *testing.T) {
+	// Число вместо прочерка читатель принял бы за результат и сделал бы по нему
+	// вывод — поэтому недостоверные перцентили не печатаются вовсе.
+	t.Run("на малой выборке — прочерки", func(t *testing.T) {
 		s := sample()
-		s.TargetRate, s.RPS = 2000, 500
-		s.Total, s.Late = 1000, 0
+		s.Latency.Samples = 50
 
 		out := render(s, Options{Width: wide})
 
-		if strings.Contains(out, "не успевали уходить") {
-			t.Error("генератор назначен виноватым без единого опоздания")
+		if !strings.Contains(out, "50 замеров") {
+			t.Errorf("в заголовке нет числа замеров:\n%s", out)
 		}
-		if !strings.Contains(out, "Либо сервис") {
-			t.Errorf("нет честного перечисления причин:\n%s", out)
+		if strings.Contains(out, "80ms") {
+			t.Error("p99 напечатан числом на выборке в 50 замеров")
 		}
-		if strings.Contains(out, "Опоздали:") {
-			t.Error("напечатана строка опозданий при нулевом счётчике")
+		if !strings.Contains(out, "p99  —") {
+			t.Errorf("p99 не заменён прочерком:\n%s", out)
+		}
+		// p50 на пятидесяти замерах ещё осмыслен
+		if !strings.Contains(out, "p50  4ms") {
+			t.Errorf("p50 скрыт, хотя порог для него всего 20:\n%s", out)
+		}
+		if !strings.Contains(out, "прочерк — мало данных") {
+			t.Errorf("прочерки не объяснены, выглядят поломкой:\n%s", out)
 		}
 	})
-}
 
-// Число вместо прочерка читатель принял бы за результат и сделал бы по нему
-// вывод — поэтому недостоверные перцентили не печатаются вовсе.
-func TestSmallSampleHidesPercentiles(t *testing.T) {
-	s := sample()
-	s.Latency.Samples = 50
+	t.Run("на достаточной — все числа", func(t *testing.T) {
+		out := render(sample(), Options{Width: wide})
 
-	out := render(s, Options{Width: wide})
-
-	if !strings.Contains(out, "50 замеров") {
-		t.Errorf("в заголовке нет числа замеров:\n%s", out)
-	}
-	if strings.Contains(out, "80ms") {
-		t.Error("p99 напечатан числом на выборке в 50 замеров")
-	}
-	if !strings.Contains(out, "p99  —") {
-		t.Errorf("p99 не заменён прочерком:\n%s", out)
-	}
-	// p50 на пятидесяти замерах ещё осмыслен
-	if !strings.Contains(out, "p50  4ms") {
-		t.Errorf("p50 скрыт, хотя порог для него всего 20:\n%s", out)
-	}
-	if !strings.Contains(out, "прочерк — мало данных") {
-		t.Errorf("прочерки не объяснены, выглядят поломкой:\n%s", out)
-	}
-}
-
-func TestFullSampleShowsEveryPercentile(t *testing.T) {
-	out := render(sample(), Options{Width: wide})
-
-	if strings.Contains(out, "—") && strings.Contains(out, "мало данных") {
-		t.Errorf("прочерки на достаточной выборке:\n%s", out)
-	}
-	if !strings.Contains(out, "p99  80ms") {
-		t.Errorf("p99 не напечатан на 2000 замерах:\n%s", out)
-	}
-}
-
-// Прочерк в строке и упоминание в пояснении обязаны совпадать. Раньше список
-// перцентилей был выписан в двух функциях и мог разойтись молча.
-func TestDashedPercentilesAreAllExplained(t *testing.T) {
-	s := sample()
-	s.Latency.Samples = 150 // хватает на p50 и p90, не хватает на p95 и p99
-
-	out := render(s, Options{Width: wide})
-
-	for _, q := range stats.Quantiles {
-		dashed := strings.Contains(out, q.Name+"  —")
-		explained := strings.Contains(out, q.Name+" от ")
-
-		if dashed != explained {
-			t.Errorf("%s: прочерк=%v, пояснение=%v — строка и сноска разошлись\n%s",
-				q.Name, dashed, explained, out)
+		if strings.Contains(out, "—") && strings.Contains(out, "мало данных") {
+			t.Errorf("прочерки на достаточной выборке:\n%s", out)
 		}
-	}
-}
-
-// Отчёт живёт дольше, чем память о том, как его получили: без этих полей
-// через полгода прогон не повторить.
-func TestProvenanceBlock(t *testing.T) {
-	opt := Options{
-		Width: wide,
-		Run: RunInfo{
-			Version:   "v0.1.1",
-			Proto:     "HTTP/1.1",
-			StartedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
-			Config: runner.Config{
-				URL: "http://example/api", Method: "POST",
-				Requests: 1000, Concurrency: 20, Timeout: 7 * time.Second,
-			},
-		},
-	}
-
-	out := render(sample(), opt)
-
-	for _, want := range []string{
-		"v0.1.1", "POST http://example/api", "closed-loop, 20 потоков",
-		"HTTP/1.1", "keep-alive", "7s", "GOMAXPROCS", "2026-08-28T12:00:00Z",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("в блоке «Прогон» нет %q:\n%s", want, out)
+		if !strings.Contains(out, "p99  80ms") {
+			t.Errorf("p99 не напечатан на 2000 замерах:\n%s", out)
 		}
-	}
-}
+	})
 
-// Пустой протокол значит «ни один ответ не пришёл» — это другое утверждение,
-// чем «HTTP/1.1», и выглядеть должно иначе, а не пустотой.
-func TestProvenanceMarksUnknownProto(t *testing.T) {
-	out := render(sample(), Options{Width: wide, Run: RunInfo{Version: "dev"}})
+	// Прочерк в строке и упоминание в пояснении обязаны совпадать. Раньше список
+	// перцентилей был выписан в двух функциях и мог разойтись молча.
+	t.Run("прочерк и сноска не расходятся", func(t *testing.T) {
+		s := sample()
+		s.Latency.Samples = 150 // хватает на p50 и p90, не хватает на p95 и p99
 
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "протокол") {
-			if !strings.Contains(line, "—") {
-				t.Errorf("неизвестный протокол показан как %q", strings.TrimSpace(line))
+		out := render(s, Options{Width: wide})
+
+		for _, q := range stats.Quantiles {
+			dashed := strings.Contains(out, q.Name+"  —")
+			explained := strings.Contains(out, q.Name+" от ")
+
+			if dashed != explained {
+				t.Errorf("%s: прочерк=%v, пояснение=%v — строка и сноска разошлись\n%s",
+					q.Name, dashed, explained, out)
 			}
-			return
 		}
-	}
-	t.Error("строки протокола нет вовсе")
+	})
 }
 
-// keep-alive выключается флагом, и в отчёте это должно быть видно: иначе
-// два прогона с разными цифрами выглядят необъяснимо.
-func TestProvenanceShowsKeepAlive(t *testing.T) {
-	on := render(sample(), Options{Width: wide, Run: RunInfo{}})
-	off := render(sample(), Options{Width: wide,
-		Run: RunInfo{Config: runner.Config{DisableKeepAlive: true}}})
+// Блок «Прогон»: без него отчёт через полгода не воспроизвести.
+func TestProvenance(t *testing.T) {
+	// Отчёт живёт дольше, чем память о том, как его получили: без этих полей
+	// через полгода прогон не повторить.
+	t.Run("все поля на месте", func(t *testing.T) {
+		opt := Options{
+			Width: wide,
+			Run: RunInfo{
+				Version:   "v0.1.1",
+				Proto:     "HTTP/1.1",
+				StartedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+				Config: runner.Config{
+					URL: "http://example/api", Method: "POST",
+					Requests: 1000, Concurrency: 20, Timeout: 7 * time.Second,
+				},
+			},
+		}
 
-	if !strings.Contains(on, "keep-alive    да") {
-		t.Errorf("keep-alive включён, но не показан:\n%s", on)
-	}
-	if !strings.Contains(off, "keep-alive    нет") {
-		t.Errorf("keep-alive выключен, но показан включённым:\n%s", off)
-	}
+		out := render(sample(), opt)
+
+		for _, want := range []string{
+			"v0.1.1", "POST http://example/api", "closed-loop, 20 потоков",
+			"HTTP/1.1", "keep-alive", "7s", "GOMAXPROCS", "2026-08-28T12:00:00Z",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("в блоке «Прогон» нет %q:\n%s", want, out)
+			}
+		}
+	})
+
+	// Пустой протокол значит «ни один ответ не пришёл» — это другое утверждение,
+	// чем «HTTP/1.1», и выглядеть должно иначе, а не пустотой.
+	t.Run("неизвестный протокол — прочерк", func(t *testing.T) {
+		out := render(sample(), Options{Width: wide, Run: RunInfo{Version: "dev"}})
+
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "протокол") {
+				if !strings.Contains(line, "—") {
+					t.Errorf("неизвестный протокол показан как %q", strings.TrimSpace(line))
+				}
+				return
+			}
+		}
+		t.Error("строки протокола нет вовсе")
+	})
+
+	// keep-alive выключается флагом, и в отчёте это должно быть видно: иначе
+	// два прогона с разными цифрами выглядят необъяснимо.
+	t.Run("keep-alive виден", func(t *testing.T) {
+		on := render(sample(), Options{Width: wide, Run: RunInfo{}})
+		off := render(sample(), Options{Width: wide,
+			Run: RunInfo{Config: runner.Config{DisableKeepAlive: true}}})
+
+		if !strings.Contains(on, "keep-alive    да") {
+			t.Errorf("keep-alive включён, но не показан:\n%s", on)
+		}
+		if !strings.Contains(off, "keep-alive    нет") {
+			t.Errorf("keep-alive выключен, но показан включённым:\n%s", off)
+		}
+	})
+}
+
+// Предупреждения, ставящие под сомнение остальные цифры прогона.
+func TestWarnings(t *testing.T) {
+	// Массовые опоздания старта означают, что запросы не успевали уходить,
+	// — это потолок генератора, а не медленный сервис. Пока данных на такой
+	// вывод нет, предупреждение обязано честно называть обе версии.
+	t.Run("причина недобора частоты", func(t *testing.T) {
+		t.Run("опоздания массовые — виноват генератор", func(t *testing.T) {
+			s := sample()
+			s.TargetRate, s.RPS = 2000, 500
+			s.Total, s.Late, s.MaxLag = 1000, 800, 250*time.Millisecond
+
+			out := render(s, Options{Width: wide})
+
+			if !strings.Contains(out, "не успевали уходить") {
+				t.Errorf("причина не названа, хотя 80%% опоздали:\n%s", out)
+			}
+			if !strings.Contains(out, "Опоздали:") || !strings.Contains(out, "800 (80%)") {
+				t.Errorf("счётчик опозданий не показан:\n%s", out)
+			}
+		})
+
+		t.Run("опозданий нет — обе версии остаются", func(t *testing.T) {
+			s := sample()
+			s.TargetRate, s.RPS = 2000, 500
+			s.Total, s.Late = 1000, 0
+
+			out := render(s, Options{Width: wide})
+
+			if strings.Contains(out, "не успевали уходить") {
+				t.Error("генератор назначен виноватым без единого опоздания")
+			}
+			if !strings.Contains(out, "Либо сервис") {
+				t.Errorf("нет честного перечисления причин:\n%s", out)
+			}
+			if strings.Contains(out, "Опоздали:") {
+				t.Error("напечатана строка опозданий при нулевом счётчике")
+			}
+		})
+	})
+
+	// Самый громкий вывод, который может сделать прогон: цифры описывают не
+	// сервис, а нас. Он обязан быть виден раньше самих цифр.
+	t.Run("упёрлись в клиента", func(t *testing.T) {
+		t.Run("печатается при исчерпании ресурсов", func(t *testing.T) {
+			s := sample()
+			s.ClientErrors = 4213
+
+			out := render(s, Options{Width: wide})
+
+			if !strings.Contains(out, "Упёрлись в клиента") {
+				t.Errorf("нет предупреждения:\n%s", out)
+			}
+			if !strings.Contains(out, "4213 запросов не ушли") {
+				t.Error("не показано, сколько запросов не ушло")
+			}
+			if !strings.Contains(out, "ulimit -n") {
+				t.Error("не сказано, что с этим делать")
+			}
+			if warn, lat := strings.Index(out, "Упёрлись"), strings.Index(out, "Latency"); warn > lat {
+				t.Error("предупреждение напечатано после блока latency")
+			}
+		})
+
+		t.Run("молчит, когда лимиты не при чём", func(t *testing.T) {
+			if strings.Contains(render(sample(), Options{Width: wide}), "Упёрлись в клиента") {
+				t.Error("предупреждение без единой клиентской ошибки")
+			}
+		})
+	})
 }

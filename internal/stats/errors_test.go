@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"syscall"
 	"testing"
 )
@@ -71,5 +72,44 @@ func TestClassifyWrappedTLS(t *testing.T) {
 
 	if got := Classify(err); got != ErrTLS {
 		t.Errorf("Classify = %q, ожидалось %q", got, ErrTLS)
+	}
+}
+
+// Исчерпание ресурсов клиента раньше попадало в «other» наравне с чем угодно,
+// хотя требует прямо противоположных действий: чинить надо у себя.
+func TestClassifyClientExhaustion(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want ErrorKind
+	}{
+		// Так эти ошибки приходят из net/http на самом деле
+		{"кончились дескрипторы процесса",
+			&net.OpError{Op: "dial", Err: os.NewSyscallError("socket", syscall.EMFILE)}, ErrFDLimit},
+		{"кончились дескрипторы системы",
+			&net.OpError{Op: "dial", Err: os.NewSyscallError("socket", syscall.ENFILE)}, ErrFDLimit},
+		{"кончились эфемерные порты",
+			&net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.EADDRNOTAVAIL)}, ErrNoPorts},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Classify(tt.err)
+			if got != tt.want {
+				t.Errorf("Classify = %q, ожидалось %q", got, tt.want)
+			}
+			if !got.ClientSide() {
+				t.Errorf("%q не помечен как проблема клиента", got)
+			}
+		})
+	}
+}
+
+func TestClientSideOnlyForOurLimits(t *testing.T) {
+	// Отказ в соединении и обрыв — про сервис или сеть, а не про наши лимиты
+	for _, kind := range []ErrorKind{ErrTimeout, ErrRefused, ErrReset, ErrDNS, ErrTLS, ErrCanceled, ErrOtherKind} {
+		if kind.ClientSide() {
+			t.Errorf("%q ошибочно помечен как проблема клиента", kind)
+		}
 	}
 }

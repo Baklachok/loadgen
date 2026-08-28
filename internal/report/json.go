@@ -32,6 +32,12 @@ type jsonBucket struct {
 	Count   int     `json:"count"`
 }
 
+// jsonPhase не обнуляет перцентили на малой выборке, в отличие от
+// jsonLatencies, и это не недосмотр. Фазы соединения по своей природе
+// измеряются единицами замеров: при keep-alive рукопожатие делает только
+// первый запрос. Обнулить их значило бы не показать ничего и никогда.
+// Вместо этого рядом всегда стоит samples — читатель видит, что число
+// посчитано по двум замерам, и сам решает, что оно стоит.
 type jsonPhase struct {
 	Samples int     `json:"samples"`
 	P50Ms   float64 `json:"p50_ms"`
@@ -74,6 +80,7 @@ type jsonSummary struct {
 	OK            int     `json:"ok"`
 	NonOK         int     `json:"non_2xx"`
 	Failed        int     `json:"failed"`
+	ClientErrors  int     `json:"client_errors"`
 	SuccessRate   float64 `json:"success_rate"`
 	ElapsedMs     float64 `json:"elapsed_ms"`
 	WindowMs      float64 `json:"window_ms"`
@@ -139,7 +146,15 @@ func phase(ph stats.PhaseStats) jsonPhase {
 	}
 }
 
+// writeJSON только кодирует. Сборка документа — отдельно: раньше эта
+// функция и собирала, и решала, какие блоки включить, и кодировала.
 func writeJSON(w io.Writer, s stats.Summary, opt Options) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(summaryJSON(s, opt))
+}
+
+func summaryJSON(s stats.Summary, opt Options) jsonSummary {
 	out := jsonSummary{
 		Config:        runConfig(opt.Run),
 		Total:         s.Total,
@@ -147,6 +162,7 @@ func writeJSON(w io.Writer, s stats.Summary, opt Options) error {
 		OK:            s.OK,
 		NonOK:         s.NonOK,
 		Failed:        s.Failed,
+		ClientErrors:  s.ClientErrors,
 		SuccessRate:   s.SuccessRate(),
 		ElapsedMs:     ms(s.Elapsed),
 		WindowMs:      ms(s.Window),
@@ -158,36 +174,47 @@ func writeJSON(w io.Writer, s stats.Summary, opt Options) error {
 		BytesRead:     s.BytesRead,
 		ThroughputMBs: s.Throughput,
 		Latency:       latencies(s.Latency),
-		Histogram:     make([]jsonBucket, 0, len(s.Histogram)),
+		Histogram:     buckets(s.Histogram),
 		Codes:         s.Codes,
 		Errors:        s.Errors,
 	}
 
-	if s.Trace != nil {
-		out.Trace = &jsonTrace{
-			Traced:  s.Trace.Traced,
-			Reused:  s.Trace.Reused,
-			DNS:     phase(s.Trace.DNS),
-			Connect: phase(s.Trace.Connect),
-			TLS:     phase(s.Trace.TLS),
-			TTFB:    phase(s.Trace.TTFB),
-		}
-	}
+	out.Trace = traceJSON(s.Trace)
 
+	// В closed-loop расписания не было, и поправка к нему бессмысленна.
 	if opt.OpenLoop {
 		corrected := latencies(s.Corrected)
 		lag := ms(s.MaxLag)
-		out.Corrected = &corrected
-		out.MaxLagMs = &lag
+		out.Corrected, out.MaxLagMs = &corrected, &lag
 	}
 
-	for _, b := range s.Histogram {
-		out.Histogram = append(out.Histogram, jsonBucket{UpperMs: ms(b.Upper), Count: b.Count})
-	}
+	return out
+}
 
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+// buckets возвращает пустой слайс, а не nil: в JSON это [] вместо null,
+// и потребителю не нужна отдельная ветка на «гистограммы не было».
+func buckets(src []stats.Bucket) []jsonBucket {
+	out := make([]jsonBucket, 0, len(src))
+	for _, b := range src {
+		out = append(out, jsonBucket{UpperMs: ms(b.Upper), Count: b.Count})
+	}
+	return out
+}
+
+// traceJSON возвращает nil, когда трассировки не было: отсутствие поля
+// и нули в нём — разные утверждения.
+func traceJSON(t *stats.TraceSummary) *jsonTrace {
+	if t == nil {
+		return nil
+	}
+	return &jsonTrace{
+		Traced:  t.Traced,
+		Reused:  t.Reused,
+		DNS:     phase(t.DNS),
+		Connect: phase(t.Connect),
+		TLS:     phase(t.TLS),
+		TTFB:    phase(t.TTFB),
+	}
 }
 
 func runConfig(run RunInfo) jsonConfig {

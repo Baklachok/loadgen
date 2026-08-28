@@ -53,6 +53,7 @@ type section func(w io.Writer, s stats.Summary, opt Options, p palette)
 // отвечать на вопрос, а справка нужна позже.
 var sections = []section{
 	writeTotals,
+	writeClientWarning,
 	writeRateWarning,
 	writeLatency,
 	writeTrace,
