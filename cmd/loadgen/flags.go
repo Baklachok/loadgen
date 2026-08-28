@@ -1,11 +1,20 @@
+// Флаги: собственные реализации flag.Value, объявление всего набора
+// и сборка конфигурации прогона. Меняется вместе — при добавлении флага
+// правится и объявление, и конфиг.
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Baklachok/loadgen/internal/runner"
+	"github.com/Baklachok/loadgen/internal/slo"
 )
 
 type headerFlag struct {
@@ -72,4 +81,122 @@ func (f *warmupFlag) Set(value string) error {
 		return nil
 	}
 	return fmt.Errorf("прогрев %q: ожидается длительность (5s) или число запросов (100)", value)
+}
+
+// flags — объявленные флаги одним типом: иначе run таскает полтора десятка
+// указателей через все свои шаги.
+type flags struct {
+	n, c        *int
+	z, timeout  *time.Duration
+	method      *string
+	body        *string
+	output      *string
+	rate        *float64
+	trace       *bool
+	insecure    *bool
+	noKeepAlive *bool
+	http2       *bool
+	showVersion *bool
+
+	sloP99       *time.Duration
+	sloErrorRate *float64
+
+	headers headerFlag
+	warmup  warmupFlag
+}
+
+func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
+	f := &flags{
+		n:           fs.Int("n", 200, "количество запросов"),
+		c:           fs.Int("c", 50, "конкурентность; в open-loop — потолок запросов в полёте"),
+		z:           fs.Duration("z", 0, "длительность прогона (взаимоисключающе с -n)"),
+		method:      fs.String("m", "GET", "HTTP-метод"),
+		body:        fs.String("d", "", "тело запроса"),
+		timeout:     fs.Duration("t", 10*time.Second, "таймаут запроса"),
+		rate:        fs.Float64("rate", 0, "постоянный RPS, режим open-loop (0 — closed-loop)"),
+		output:      fs.String("o", "text", "формат вывода: text или json"),
+		trace:       fs.Bool("trace", false, "разбить latency по фазам: DNS, TCP, TLS, TTFB"),
+		insecure:    fs.Bool("insecure", false, "не проверять TLS-сертификат"),
+		noKeepAlive: fs.Bool("disable-keepalive", false, "новое соединение на каждый запрос"),
+		http2:       fs.Bool("http2", false, "разрешить HTTP/2"),
+		showVersion: fs.Bool("version", false, "показать версию"),
+
+		sloP99:       fs.Duration("slo-p99", 0, "порог приёмки: p99 не выше указанного, иначе код 3"),
+		sloErrorRate: fs.Float64("slo-error-rate", 0, "порог приёмки: доля не-2xx в процентах, иначе код 3"),
+	}
+	fs.Var(&f.headers, "H", "заголовок в формате 'Key: Value' (можно несколько раз)")
+	fs.Var(&f.warmup, "warmup", "прогрев: длительность (5s) или число запросов (100), в статистику не идёт")
+
+	fs.Usage = func() {
+		fmt.Fprintf(stderr, "loadgen — нагрузочный тестер HTTP\n\n")
+		fmt.Fprintf(stderr, "Использование:\n  loadgen [флаги] URL\n\nФлаги:\n")
+		fs.PrintDefaults()
+
+		fmt.Fprintf(stderr, "\nПримеры:\n")
+		for _, ex := range []string{
+			"loadgen -n 1000 -c 50 http://localhost:8080",
+			"loadgen -z 30s -rate 500 -c 200 http://localhost:8080   # open-loop",
+			"loadgen -n 1000 -o json http://localhost:8080 | jq .latency.p99_ms",
+			`loadgen -m POST -d '{"a":1}' -H 'Content-Type: application/json' http://localhost:8080/api`,
+		} {
+			fmt.Fprintf(stderr, "  %s\n", ex)
+		}
+	}
+	return f
+}
+
+// setFlags — имена флагов, заданных в командной строке. Нужен там, где
+// умолчание неотличимо от осознанного выбора.
+func setFlags(fs *flag.FlagSet) map[string]bool {
+	set := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	return set
+}
+
+// config собирает конфиг прогона и ловит противоречие, которого Validate
+// увидеть не может: он смотрит на значения, а не на то, задавал ли их человек.
+func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
+	// Заданы ли флаги явно, знает только FlagSet: сравнение с умолчанием
+	// не годится — «-n 200 -z 5s» тоже противоречие, хотя 200 это дефолт,
+	// а «-slo-error-rate 0» это осмысленное «ни одной ошибки».
+	set := setFlags(fs)
+	if set["n"] && set["z"] {
+		return runner.Config{}, errors.New("-n и -z взаимоисключающи")
+	}
+
+	// -n обнуляется при -z, иначе Validate решит, что заданы оба.
+	requests := *f.n
+	if *f.z > 0 {
+		requests = 0
+	}
+
+	cfg := runner.Config{
+		URL:              fs.Arg(0),
+		Method:           *f.method,
+		Body:             []byte(*f.body),
+		Headers:          f.headers.h,
+		Requests:         requests,
+		Duration:         *f.z,
+		Concurrency:      *f.c,
+		Timeout:          *f.timeout,
+		Rate:             *f.rate,
+		Trace:            *f.trace,
+		WarmupRequests:   f.warmup.requests,
+		WarmupDuration:   f.warmup.duration,
+		DisableKeepAlive: *f.noKeepAlive,
+		Insecure:         *f.insecure,
+		HTTP2:            *f.http2,
+	}
+	return cfg, cfg.Validate()
+}
+
+// slo собирает пороги приёмки. Не заданный порог остаётся нулевым, и Check
+// его пропускает; ноль у error-rate осмыслен сам по себе, поэтому «задан ли»
+// спрашивается у FlagSet, а не угадывается по значению.
+func (f *flags) slo(fs *flag.FlagSet) slo.Thresholds {
+	out := slo.Thresholds{P99: *f.sloP99, ErrorRate: -1}
+	if setFlags(fs)["slo-error-rate"] {
+		out.ErrorRate = *f.sloErrorRate / 100
+	}
+	return out
 }
