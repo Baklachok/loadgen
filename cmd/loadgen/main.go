@@ -151,12 +151,28 @@ func main() {
 		Run:      report.RunInfo{Version: buildVersion(), Config: cfg},
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	// Свой канал вместо signal.NotifyContext: его stop() отменяет контекст,
+	// и наблюдатель просыпался при обычном завершении — сообщение об остановке
+	// печаталось на каждом успешном прогоне.
+	//
+	// Буфер на два: пока печатаем и отменяем, второй Ctrl+C не должен потеряться.
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	go func() {
-		<-ctx.Done()
-		fmt.Fprintln(os.Stderr, "\nостановка, собираю результаты...")
+		<-signals
+		fmt.Fprintln(os.Stderr, "\nостановка, собираю результаты… (ещё раз Ctrl+C — выйти немедленно)")
+		cancel()
+
+		// Без этого зависший запрос делает Ctrl+C бесполезным, и пользователь
+		// уходит в kill -9, теряя все собранные результаты.
+		<-signals
+		fmt.Fprintln(os.Stderr, "прервано")
+		os.Exit(130)
 	}()
 
 	// Печатать ли шапку, решает сам рендерер: в машинных форматах её нет.
