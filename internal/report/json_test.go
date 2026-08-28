@@ -1,7 +1,6 @@
 package report
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -27,10 +26,7 @@ func TestJSONShape(t *testing.T) {
 		} `json:"histogram"`
 	}
 
-	raw := renderJSON(t, sample(), Options{OpenLoop: true})
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("невалидный JSON: %v\n%s", err, raw)
-	}
+	decodeJSON(t, sample(), Options{OpenLoop: true}, &got)
 
 	if got.Total != 100 {
 		t.Errorf("total = %d, want 100", got.Total)
@@ -73,19 +69,17 @@ func TestJSONOmitsTraceWhenNotMeasured(t *testing.T) {
 			Traced  int `json:"traced"`
 			Reused  int `json:"reused"`
 			Connect struct {
-				Count int `json:"count"`
+				Samples int `json:"samples"`
 			} `json:"connect"`
 		} `json:"trace"`
 	}
-	if err := json.Unmarshal(renderJSON(t, traced(), Options{}), &got); err != nil {
-		t.Fatalf("невалидный JSON: %v", err)
-	}
+	decodeJSON(t, traced(), Options{}, &got)
 
 	if got.Trace == nil || got.Trace.Traced != 1000 || got.Trace.Reused != 998 {
 		t.Errorf("trace = %+v", got.Trace)
 	}
-	if got.Trace.Connect.Count != 2 {
-		t.Errorf("connect.count = %d, ожидалось 2", got.Trace.Connect.Count)
+	if got.Trace.Connect.Samples != 2 {
+		t.Errorf("connect.samples = %d, ожидалось 2", got.Trace.Connect.Samples)
 	}
 }
 
@@ -93,9 +87,7 @@ func TestJSONOnEmptyRun(t *testing.T) {
 	empty := stats.Summary{Codes: map[int]int{}, Errors: map[stats.ErrorKind]int{}}
 
 	var fields map[string]any
-	if err := json.Unmarshal(renderJSON(t, empty, Options{}), &fields); err != nil {
-		t.Fatalf("невалидный JSON на пустом прогоне: %v", err)
-	}
+	decodeJSON(t, empty, Options{}, &fields)
 	if fields["histogram"] == nil {
 		t.Error("histogram должен быть [], а не null — потребителю проще итерироваться")
 	}
@@ -113,9 +105,7 @@ func TestJSONReportsOutcomesSeparately(t *testing.T) {
 		SuccessRate float64 `json:"success_rate"`
 	}
 
-	if err := json.Unmarshal(renderJSON(t, sample(), Options{}), &got); err != nil {
-		t.Fatal(err)
-	}
+	decodeJSON(t, sample(), Options{}, &got)
 
 	if got.Total != 100 || got.OK != 90 || got.NonOK != 8 || got.Failed != 2 {
 		t.Errorf("исходы: %+v", got)
@@ -135,9 +125,7 @@ func TestJSONReportsWarmup(t *testing.T) {
 	var got struct {
 		Warmup int `json:"warmup_discarded"`
 	}
-	if err := json.Unmarshal(renderJSON(t, s, Options{}), &got); err != nil {
-		t.Fatal(err)
-	}
+	decodeJSON(t, s, Options{}, &got)
 	if got.Warmup != 42 {
 		t.Errorf("warmup_discarded = %d, ожидалось 42", got.Warmup)
 	}
@@ -151,9 +139,7 @@ func TestJSONReportsMeasurementWindow(t *testing.T) {
 		ElapsedMs float64 `json:"elapsed_ms"`
 		WindowMs  float64 `json:"window_ms"`
 	}
-	if err := json.Unmarshal(renderJSON(t, s, Options{}), &got); err != nil {
-		t.Fatal(err)
-	}
+	decodeJSON(t, s, Options{}, &got)
 
 	if got.ElapsedMs != 6000 || got.WindowMs != 1500 {
 		t.Errorf("elapsed_ms=%v window_ms=%v, ожидалось 6000 и 1500", got.ElapsedMs, got.WindowMs)
@@ -168,9 +154,7 @@ func TestJSONReportsRateShortfall(t *testing.T) {
 		TargetRate    float64 `json:"target_rate"`
 		RateShortfall float64 `json:"rate_shortfall"`
 	}
-	if err := json.Unmarshal(renderJSON(t, s, Options{}), &got); err != nil {
-		t.Fatal(err)
-	}
+	decodeJSON(t, s, Options{}, &got)
 
 	if got.TargetRate != 1000 {
 		t.Errorf("target_rate = %v, ожидалось 1000", got.TargetRate)
@@ -188,10 +172,39 @@ func TestJSONReportsLateDispatches(t *testing.T) {
 		Late      int     `json:"late"`
 		LateShare float64 `json:"late_share"`
 	}
-	if err := json.Unmarshal(renderJSON(t, s, Options{}), &got); err != nil {
-		t.Fatal(err)
-	}
+	decodeJSON(t, s, Options{}, &got)
 	if got.Late != 250 || got.LateShare != 0.25 {
 		t.Errorf("late=%d late_share=%v, ожидалось 250 и 0.25", got.Late, got.LateShare)
+	}
+}
+
+// Для машины недостоверный перцентиль — null, а не число: переспросить
+// она не может, и любое число примет за факт.
+func TestJSONNullsUnreliablePercentiles(t *testing.T) {
+	s := sample()
+	s.Latency.Samples = 50
+
+	var got struct {
+		Latency struct {
+			Samples int      `json:"samples"`
+			P50Ms   *float64 `json:"p50_ms"`
+			P99Ms   *float64 `json:"p99_ms"`
+			MaxMs   float64  `json:"max_ms"`
+		} `json:"latency"`
+	}
+	decodeJSON(t, s, Options{}, &got)
+
+	if got.Latency.Samples != 50 {
+		t.Errorf("samples = %d, ожидалось 50", got.Latency.Samples)
+	}
+	if got.Latency.P99Ms != nil {
+		t.Errorf("p99_ms = %v, ожидался null на 50 замерах", *got.Latency.P99Ms)
+	}
+	if got.Latency.P50Ms == nil {
+		t.Error("p50_ms обнулён, хотя порог для него всего 20 замеров")
+	}
+	// max — не перцентиль, он остаётся числом при любой выборке
+	if got.Latency.MaxMs != 90 {
+		t.Errorf("max_ms = %v, ожидалось 90", got.Latency.MaxMs)
 	}
 }

@@ -304,3 +304,59 @@ func TestRateWarningNamesTheCauseWhenKnown(t *testing.T) {
 		}
 	})
 }
+
+// Число вместо прочерка читатель принял бы за результат и сделал бы по нему
+// вывод — поэтому недостоверные перцентили не печатаются вовсе.
+func TestSmallSampleHidesPercentiles(t *testing.T) {
+	s := sample()
+	s.Latency.Samples = 50
+
+	out := render(s, Options{Width: 100})
+
+	if !strings.Contains(out, "50 замеров") {
+		t.Errorf("в заголовке нет числа замеров:\n%s", out)
+	}
+	if strings.Contains(out, "80ms") {
+		t.Error("p99 напечатан числом на выборке в 50 замеров")
+	}
+	if !strings.Contains(out, "p99  —") {
+		t.Errorf("p99 не заменён прочерком:\n%s", out)
+	}
+	// p50 на пятидесяти замерах ещё осмыслен
+	if !strings.Contains(out, "p50  4ms") {
+		t.Errorf("p50 скрыт, хотя порог для него всего 20:\n%s", out)
+	}
+	if !strings.Contains(out, "прочерк — мало данных") {
+		t.Errorf("прочерки не объяснены, выглядят поломкой:\n%s", out)
+	}
+}
+
+func TestFullSampleShowsEveryPercentile(t *testing.T) {
+	out := render(sample(), Options{Width: 100})
+
+	if strings.Contains(out, "—") && strings.Contains(out, "мало данных") {
+		t.Errorf("прочерки на достаточной выборке:\n%s", out)
+	}
+	if !strings.Contains(out, "p99  80ms") {
+		t.Errorf("p99 не напечатан на 2000 замерах:\n%s", out)
+	}
+}
+
+// Прочерк в строке и упоминание в пояснении обязаны совпадать. Раньше список
+// перцентилей был выписан в двух функциях и мог разойтись молча.
+func TestDashedPercentilesAreAllExplained(t *testing.T) {
+	s := sample()
+	s.Latency.Samples = 150 // хватает на p50 и p90, не хватает на p95 и p99
+
+	out := render(s, Options{Width: 100})
+
+	for _, q := range stats.Quantiles {
+		dashed := strings.Contains(out, q.Name+"  —")
+		explained := strings.Contains(out, q.Name+" от ")
+
+		if dashed != explained {
+			t.Errorf("%s: прочерк=%v, пояснение=%v — строка и сноска разошлись\n%s",
+				q.Name, dashed, explained, out)
+		}
+	}
+}

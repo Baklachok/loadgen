@@ -34,15 +34,15 @@ func TestComputeTrace(t *testing.T) {
 		if s.Trace.Traced != 4 || s.Trace.Reused != 3 {
 			t.Errorf("traced=%d reused=%d, ожидалось 4 и 3", s.Trace.Traced, s.Trace.Reused)
 		}
-		if s.Trace.Connect.Count != 1 {
-			t.Errorf("Connect.Count = %d, ожидался 1: три запроса не соединялись вовсе", s.Trace.Connect.Count)
+		if s.Trace.Connect.Samples != 1 {
+			t.Errorf("Connect.Count = %d, ожидался 1: три запроса не соединялись вовсе", s.Trace.Connect.Samples)
 		}
 		// Если бы нули учитывались, среднее было бы 1.5мс вместо 6мс
 		if s.Trace.Connect.Mean != ms(6) {
 			t.Errorf("Connect.Mean = %v, ожидалось 6ms", s.Trace.Connect.Mean)
 		}
-		if s.Trace.TTFB.Count != 4 {
-			t.Errorf("TTFB.Count = %d, ожидалось 4: первый байт получили все", s.Trace.TTFB.Count)
+		if s.Trace.TTFB.Samples != 4 {
+			t.Errorf("TTFB.Count = %d, ожидалось 4: первый байт получили все", s.Trace.TTFB.Samples)
 		}
 	})
 
@@ -52,7 +52,7 @@ func TestComputeTrace(t *testing.T) {
 		}
 
 		s := compute(results, time.Second)
-		if s.Trace.TLS.Count != 0 || s.Trace.TLS.P99 != 0 {
+		if s.Trace.TLS.Samples != 0 || s.Trace.TLS.P99 != 0 {
 			t.Errorf("TLS = %+v, ожидалась пустая фаза: по HTTP рукопожатия нет", s.Trace.TLS)
 		}
 	})
@@ -76,8 +76,8 @@ func TestComputeTraceExcludesWarmup(t *testing.T) {
 	if s.Trace.Traced != 1 {
 		t.Errorf("Traced = %d, ожидался 1: прогрев не измеряется", s.Trace.Traced)
 	}
-	if s.Trace.Connect.Count != 0 {
-		t.Errorf("Connect.Count = %d, ожидался 0: рукопожатие сделал прогрев", s.Trace.Connect.Count)
+	if s.Trace.Connect.Samples != 0 {
+		t.Errorf("Connect.Count = %d, ожидался 0: рукопожатие сделал прогрев", s.Trace.Connect.Samples)
 	}
 	if s.Trace.TTFB.P50 != ms(4) {
 		t.Errorf("TTFB p50 = %v, ожидалось 4ms", s.Trace.TTFB.P50)

@@ -12,14 +12,18 @@ import (
 // Отдельные DTO, а не теги на stats.Summary: time.Duration сериализуется в
 // наносекунды-числом, что нечитаемо, и формат отчёта не должен ломаться
 // каждый раз, когда внутри stats переименовали поле.
+// Перцентили — указатели: на недостаточной выборке они уезжают в null.
+// Число здесь было бы такой же ложью, как в текстовом отчёте, только
+// потребитель у него автоматический и переспросить не может.
 type jsonLatencies struct {
-	MinMs  float64 `json:"min_ms"`
-	MeanMs float64 `json:"mean_ms"`
-	P50Ms  float64 `json:"p50_ms"`
-	P90Ms  float64 `json:"p90_ms"`
-	P95Ms  float64 `json:"p95_ms"`
-	P99Ms  float64 `json:"p99_ms"`
-	MaxMs  float64 `json:"max_ms"`
+	Samples int      `json:"samples"`
+	MinMs   float64  `json:"min_ms"`
+	MeanMs  float64  `json:"mean_ms"`
+	P50Ms   *float64 `json:"p50_ms"`
+	P90Ms   *float64 `json:"p90_ms"`
+	P95Ms   *float64 `json:"p95_ms"`
+	P99Ms   *float64 `json:"p99_ms"`
+	MaxMs   float64  `json:"max_ms"`
 }
 
 type jsonBucket struct {
@@ -28,11 +32,11 @@ type jsonBucket struct {
 }
 
 type jsonPhase struct {
-	Count int     `json:"count"`
-	P50Ms float64 `json:"p50_ms"`
-	P90Ms float64 `json:"p90_ms"`
-	P99Ms float64 `json:"p99_ms"`
-	MaxMs float64 `json:"max_ms"`
+	Samples int     `json:"samples"`
+	P50Ms   float64 `json:"p50_ms"`
+	P90Ms   float64 `json:"p90_ms"`
+	P99Ms   float64 `json:"p99_ms"`
+	MaxMs   float64 `json:"max_ms"`
 }
 
 type jsonTrace struct {
@@ -84,24 +88,34 @@ func ms(d time.Duration) float64 {
 }
 
 func latencies(l stats.Latencies) jsonLatencies {
+	// percentile отдаёт nil, когда замеров не хватило на осмысленное число.
+	percentile := func(d time.Duration, q float64) *float64 {
+		if !l.Reliable(q) {
+			return nil
+		}
+		v := ms(d)
+		return &v
+	}
+
 	return jsonLatencies{
-		MinMs:  ms(l.Min),
-		MeanMs: ms(l.Mean),
-		P50Ms:  ms(l.P50),
-		P90Ms:  ms(l.P90),
-		P95Ms:  ms(l.P95),
-		P99Ms:  ms(l.P99),
-		MaxMs:  ms(l.Max),
+		Samples: l.Samples,
+		MinMs:   ms(l.Min),
+		MeanMs:  ms(l.Mean),
+		P50Ms:   percentile(l.P50, 0.50),
+		P90Ms:   percentile(l.P90, 0.90),
+		P95Ms:   percentile(l.P95, 0.95),
+		P99Ms:   percentile(l.P99, 0.99),
+		MaxMs:   ms(l.Max),
 	}
 }
 
 func phase(ph stats.PhaseStats) jsonPhase {
 	return jsonPhase{
-		Count: ph.Count,
-		P50Ms: ms(ph.P50),
-		P90Ms: ms(ph.P90),
-		P99Ms: ms(ph.P99),
-		MaxMs: ms(ph.Max),
+		Samples: ph.Samples,
+		P50Ms:   ms(ph.P50),
+		P90Ms:   ms(ph.P90),
+		P99Ms:   ms(ph.P99),
+		MaxMs:   ms(ph.Max),
 	}
 }
 

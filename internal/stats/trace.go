@@ -11,10 +11,9 @@ import (
 // keep-alive резолв и рукопожатие делает только первый запрос на соединение,
 // и «p50 DNS» по трём замерам из десяти тысяч — совсем другое утверждение,
 // чем по всем десяти тысячам.
-type PhaseStats struct {
-	Latencies
-	Count int
-}
+// PhaseStats — это Latencies и есть: число замеров теперь живёт в них самих,
+// и отдельный Count только дублировал бы его, готовый разойтись при правке.
+type PhaseStats = Latencies
 
 // TraceSummary — разбивка времени запроса по фазам соединения.
 type TraceSummary struct {
@@ -42,7 +41,7 @@ func (a *phaseAcc) add(d time.Duration) {
 }
 
 func (a *phaseAcc) stats() PhaseStats {
-	return PhaseStats{Latencies: a.latencies(), Count: len(a.values)}
+	return a.latencies()
 }
 
 // computeTrace возвращает nil, если трассировка была выключена: отчёту нужно

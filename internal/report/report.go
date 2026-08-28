@@ -166,7 +166,7 @@ func highlightNonZero(n int, color func(string) string) string {
 }
 
 func writeLatency(w io.Writer, s stats.Summary, opt Options, p palette) {
-	fmt.Fprintf(w, "\n%s\n", p.bold("Latency (время запроса)"))
+	fmt.Fprintf(w, "\n%s\n", p.bold(fmt.Sprintf("Latency (время запроса, %d замеров)", s.Latency.Samples)))
 	writeLatencies(w, s.Latency, p)
 
 	if !opt.OpenLoop {
@@ -179,17 +179,44 @@ func writeLatency(w io.Writer, s stats.Summary, opt Options, p palette) {
 	fmt.Fprintf(w, "\n%s %v\n", p.dim("Макс. отставание старта:"), s.MaxLag.Round(time.Microsecond))
 }
 
+// Перцентили, на которые не набралось замеров, печатаются прочерком.
+// Число вместо прочерка было бы максимумом под именем p99 — и читатель
+// принял бы по нему решение.
 func writeLatencies(w io.Writer, l stats.Latencies, p palette) {
-	row := func(name string, d time.Duration) {
-		fmt.Fprintf(w, "  %s %v\n", p.dim(fmt.Sprintf("%-4s", name)), d.Round(time.Microsecond))
+	row := func(name, value string) {
+		fmt.Fprintf(w, "  %s %s\n", p.dim(fmt.Sprintf("%-4s", name)), value)
 	}
-	row("min", l.Min)
-	row("mean", l.Mean)
-	row("p50", l.P50)
-	row("p90", l.P90)
-	row("p95", l.P95)
-	row("p99", l.P99)
-	row("max", l.Max)
+	dur := func(d time.Duration) string { return d.Round(time.Microsecond).String() }
+
+	row("min", dur(l.Min))
+	row("mean", dur(l.Mean))
+	for _, q := range stats.Quantiles {
+		if !l.Reliable(q.Q) {
+			row(q.Name, p.dim("—"))
+			continue
+		}
+		row(q.Name, dur(q.Value(l)))
+	}
+	row("max", dur(l.Max))
+
+	writeSampleNote(w, l, p)
+}
+
+// writeSampleNote объясняет прочерки: без него они выглядят поломкой,
+// а не отказом отвечать по недостатку данных.
+func writeSampleNote(w io.Writer, l stats.Latencies, p palette) {
+	var missing []string
+	for _, q := range stats.Quantiles {
+		if !l.Reliable(q.Q) {
+			missing = append(missing, fmt.Sprintf("%s от %d", q.Name, stats.MinSamples(q.Q)))
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	fmt.Fprintf(w, "  %s\n", p.dim(fmt.Sprintf("замеров %d, прочерк — мало данных: %s",
+		l.Samples, strings.Join(missing, ", "))))
 }
 
 // writeHistogram рисует столбики, растягивая самый высокий на всю оставшуюся
@@ -296,11 +323,11 @@ func writeTrace(w io.Writer, t *stats.TraceSummary, p palette) {
 	row := func(name string, ph stats.PhaseStats) {
 		// Фаза без единого замера получает прочерк, а не нули: ноль читался бы
 		// как «прошла мгновенно», хотя её попросту не было.
-		if ph.Count == 0 {
+		if ph.Samples == 0 {
 			fmt.Fprintf(w, tracePhaseRow+"\n", name, "0", "—", "—", "—")
 			return
 		}
-		fmt.Fprintf(w, tracePhaseRow+"\n", name, strconv.Itoa(ph.Count),
+		fmt.Fprintf(w, tracePhaseRow+"\n", name, strconv.Itoa(ph.Samples),
 			dur(ph.P50), dur(ph.P99), dur(ph.Max))
 	}
 

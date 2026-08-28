@@ -13,6 +13,49 @@ const histogramBuckets = 10
 type Latencies struct {
 	Min, Mean, Max     time.Duration
 	P50, P90, P95, P99 time.Duration
+
+	// Samples — по скольким замерам всё это посчитано. Без него перцентиль
+	// невозможно оценить: p99 по пятидесяти замерам — это максимум,
+	// названный красивым словом.
+	Samples int
+}
+
+// Quantile — перцентиль, который инструмент считает и печатает: имя,
+// сама квантиль и способ достать уже посчитанное значение.
+//
+// Имя хранится, а не выводится из числа: fmt.Sprintf("p%g", 0.9*100) даёт
+// «p90.00000000000001», потому что 0.9*100 в двоичной арифметике не ровно 90.
+type Quantile struct {
+	Name  string
+	Q     float64
+	Value func(Latencies) time.Duration
+}
+
+// Quantiles — один список на весь проект. Раньше он был выписан дважды:
+// в строках отчёта и в пояснении к прочеркам, и добавление перцентиля
+// требовало не забыть про оба.
+var Quantiles = []Quantile{
+	{"p50", 0.50, func(l Latencies) time.Duration { return l.P50 }},
+	{"p90", 0.90, func(l Latencies) time.Duration { return l.P90 }},
+	{"p95", 0.95, func(l Latencies) time.Duration { return l.P95 }},
+	{"p99", 0.99, func(l Latencies) time.Duration { return l.P99 }},
+}
+
+// MinSamples — сколько замеров нужно, чтобы перцентиль p что-то значил.
+// Правило n >= 10/(1-p): десять наблюдений в самом хвосте. Отсюда p90
+// требует 100 замеров, p95 — 200, p99 — 1000.
+func MinSamples(p float64) int {
+	if p <= 0 || p >= 1 {
+		return 1
+	}
+	// Эпсилон обязателен: 1-0.9 в двоичной арифметике даёт 0.09999999999999998,
+	// и Ceil честно округляет получившиеся 100.00000000000001 до 101.
+	return int(math.Ceil(10/(1-p) - 1e-9))
+}
+
+// Reliable сообщает, набралось ли замеров на осмысленный перцентиль p.
+func (l Latencies) Reliable(p float64) bool {
+	return l.Samples >= MinSamples(p)
 }
 
 // samples копит замеры для перцентилей. Сумму держим рядом, чтобы среднее
@@ -42,13 +85,14 @@ func (s *samples) latencies() Latencies {
 	}
 
 	return Latencies{
-		Min:  sorted[0],
-		Max:  sorted[len(sorted)-1],
-		Mean: s.total / time.Duration(len(sorted)),
-		P50:  Percentile(sorted, 0.50),
-		P90:  Percentile(sorted, 0.90),
-		P95:  Percentile(sorted, 0.95),
-		P99:  Percentile(sorted, 0.99),
+		Samples: len(sorted),
+		Min:     sorted[0],
+		Max:     sorted[len(sorted)-1],
+		Mean:    s.total / time.Duration(len(sorted)),
+		P50:     Percentile(sorted, 0.50),
+		P90:     Percentile(sorted, 0.90),
+		P95:     Percentile(sorted, 0.95),
+		P99:     Percentile(sorted, 0.99),
 	}
 }
 

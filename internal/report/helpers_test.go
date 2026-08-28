@@ -3,6 +3,7 @@ package report
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -36,8 +37,10 @@ func sample() stats.Summary {
 	return stats.Summary{
 		Total: 100, OK: 90, NonOK: 8, Failed: 2,
 		Elapsed: 2 * time.Second, RPS: 49,
-		Latency:   stats.Latencies{Min: millis(1), Mean: millis(5), Max: millis(90), P50: millis(4), P90: millis(9), P95: millis(30), P99: millis(80)},
-		Corrected: stats.Latencies{Min: millis(1), Mean: millis(9), Max: millis(120), P50: millis(5), P90: millis(40), P95: millis(70), P99: millis(110)},
+		// Samples заведомо выше порога p99: тесты ниже про раскраску и
+		// ширину, а не про достаточность выборки — для неё отдельные.
+		Latency:   stats.Latencies{Samples: 2000, Min: millis(1), Mean: millis(5), Max: millis(90), P50: millis(4), P90: millis(9), P95: millis(30), P99: millis(80)},
+		Corrected: stats.Latencies{Samples: 2000, Min: millis(1), Mean: millis(9), Max: millis(120), P50: millis(5), P90: millis(40), P95: millis(70), P99: millis(110)},
 		MaxLag:    millis(30),
 		Histogram: []stats.Bucket{
 			{Upper: millis(10), Count: 80},
@@ -58,9 +61,21 @@ func traced() stats.Summary {
 	s.Trace = &stats.TraceSummary{
 		Traced:  1000,
 		Reused:  998,
-		DNS:     stats.PhaseStats{Count: 2, Latencies: stats.Latencies{P50: millis(1), P99: millis(3), Max: millis(3)}},
-		Connect: stats.PhaseStats{Count: 2, Latencies: stats.Latencies{P50: millis(1), P99: millis(2), Max: millis(2)}},
-		TTFB:    stats.PhaseStats{Count: 1000, Latencies: stats.Latencies{P50: millis(6), P99: millis(400), Max: millis(450)}},
+		DNS:     stats.Latencies{Samples: 2, P50: millis(1), P99: millis(3), Max: millis(3)},
+		Connect: stats.Latencies{Samples: 2, P50: millis(1), P99: millis(2), Max: millis(2)},
+		TTFB:    stats.Latencies{Samples: 1000, P50: millis(6), P99: millis(400), Max: millis(450)},
 	}
 	return s
+}
+
+// decodeJSON разбирает отчёт в переданную структуру. Каждый тест ниже
+// описывает только те поля, что проверяет, — а три строки на Unmarshal
+// с t.Fatal повторялись при каждом.
+func decodeJSON(t *testing.T, s stats.Summary, opt Options, into any) {
+	t.Helper()
+
+	raw := renderJSON(t, s, opt)
+	if err := json.Unmarshal(raw, into); err != nil {
+		t.Fatalf("невалидный JSON: %v\n%s", err, raw)
+	}
 }
