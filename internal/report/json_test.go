@@ -52,207 +52,231 @@ func TestJSONShape(t *testing.T) {
 	}
 }
 
-func TestJSONOmitsCorrectedInClosedLoop(t *testing.T) {
-	out := string(renderJSON(t, sample(), Options{OpenLoop: false}))
+// Поля документа: каждое несёт то, что обещает его имя.
+func TestJSONFields(t *testing.T) {
+	// Заголовок отчёта не должен читаться как успех, когда сервис отдавал
+	// одни отказы: ровно эта строка раньше и врала.
+	t.Run("исходы по отдельности", func(t *testing.T) {
+		var got struct {
+			Total       int     `json:"total"`
+			OK          int     `json:"ok"`
+			NonOK       int     `json:"non_2xx"`
+			Failed      int     `json:"failed"`
+			SuccessRate float64 `json:"success_rate"`
+		}
 
-	if strings.Contains(out, "corrected") || strings.Contains(out, "max_lag_ms") {
-		t.Error("в closed-loop полей поправки быть не должно: иначе потребитель решит, что расписание было")
-	}
+		decodeJSON(t, sample(), Options{}, &got)
+
+		if got.Total != 100 || got.OK != 90 || got.NonOK != 8 || got.Failed != 2 {
+			t.Errorf("исходы: %+v", got)
+		}
+		if got.SuccessRate != 0.9 {
+			t.Errorf("success_rate = %v, ожидалось 0.9", got.SuccessRate)
+		}
+	})
+
+	// Строка прогрева появляется только когда он был: постоянный «Прогрев: 0»
+	// приучает не читать шапку.
+	t.Run("отброшенный прогрев", func(t *testing.T) {
+		s := sample()
+		s.Warmup = 42
+
+		var got struct {
+			Warmup int `json:"warmup_discarded"`
+		}
+		decodeJSON(t, s, Options{}, &got)
+		if got.Warmup != 42 {
+			t.Errorf("warmup_discarded = %d, ожидалось 42", got.Warmup)
+		}
+	})
+
+	t.Run("окно измерения", func(t *testing.T) {
+		s := sample()
+		s.Elapsed, s.Window = 6*time.Second, 1500*time.Millisecond
+
+		var got struct {
+			ElapsedMs float64 `json:"elapsed_ms"`
+			WindowMs  float64 `json:"window_ms"`
+		}
+		decodeJSON(t, s, Options{}, &got)
+
+		if got.ElapsedMs != 6000 || got.WindowMs != 1500 {
+			t.Errorf("elapsed_ms=%v window_ms=%v, ожидалось 6000 и 1500", got.ElapsedMs, got.WindowMs)
+		}
+	})
+
+	t.Run("недобор частоты", func(t *testing.T) {
+		s := sample()
+		s.TargetRate, s.RPS = 1000, 400
+
+		var got struct {
+			TargetRate    float64 `json:"target_rate"`
+			RateShortfall float64 `json:"rate_shortfall"`
+		}
+		decodeJSON(t, s, Options{}, &got)
+
+		if got.TargetRate != 1000 {
+			t.Errorf("target_rate = %v, ожидалось 1000", got.TargetRate)
+		}
+		if got.RateShortfall != 0.6 {
+			t.Errorf("rate_shortfall = %v, ожидалось 0.6", got.RateShortfall)
+		}
+	})
+
+	t.Run("опоздавшие запросы", func(t *testing.T) {
+		s := sample()
+		s.Total, s.Late = 1000, 250
+
+		var got struct {
+			Late      int     `json:"late"`
+			LateShare float64 `json:"late_share"`
+		}
+		decodeJSON(t, s, Options{}, &got)
+		if got.Late != 250 || got.LateShare != 0.25 {
+			t.Errorf("late=%d late_share=%v, ожидалось 250 и 0.25", got.Late, got.LateShare)
+		}
+	})
+
+	t.Run("прерванный прогон", func(t *testing.T) {
+		var full, cut struct {
+			Partial bool `json:"partial"`
+		}
+		decodeJSON(t, sample(), Options{}, &full)
+
+		s := sample()
+		s.Partial = true
+		decodeJSON(t, s, Options{}, &cut)
+
+		if full.Partial {
+			t.Error("partial=true на полном прогоне")
+		}
+		if !cut.Partial {
+			t.Error("partial=false на прерванном")
+		}
+	})
+
+	t.Run("конфигурация прогона", func(t *testing.T) {
+		opt := Options{Run: RunInfo{
+			Version:   "v0.1.1",
+			Proto:     "HTTP/2.0",
+			StartedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+			Config: runner.Config{
+				URL: "http://example/api", Method: "POST",
+				Requests: 1000, Concurrency: 20, Rate: 500,
+				Timeout: 7 * time.Second, DisableKeepAlive: true,
+			},
+		}}
+
+		var got struct {
+			Config struct {
+				Version     string  `json:"version"`
+				URL         string  `json:"url"`
+				Method      string  `json:"method"`
+				Requests    int     `json:"requests"`
+				Concurrency int     `json:"concurrency"`
+				Rate        float64 `json:"rate"`
+				TimeoutMs   float64 `json:"timeout_ms"`
+				KeepAlive   bool    `json:"keepalive"`
+				Proto       string  `json:"proto"`
+				GOMAXPROCS  int     `json:"gomaxprocs"`
+				StartedAt   string  `json:"started_at"`
+			} `json:"config"`
+		}
+		decodeJSON(t, sample(), opt, &got)
+
+		c := got.Config
+		if c.Version != "v0.1.1" || c.URL != "http://example/api" || c.Method != "POST" {
+			t.Errorf("цель и версия: %+v", c)
+		}
+		if c.Requests != 1000 || c.Concurrency != 20 || c.Rate != 500 || c.TimeoutMs != 7000 {
+			t.Errorf("флаги прогона: %+v", c)
+		}
+		if c.KeepAlive {
+			t.Error("keepalive=true при -disable-keepalive")
+		}
+		if c.Proto != "HTTP/2.0" || c.StartedAt != "2026-08-28T12:00:00Z" {
+			t.Errorf("протокол и время: proto=%q started_at=%q", c.Proto, c.StartedAt)
+		}
+		if c.GOMAXPROCS < 1 {
+			t.Errorf("gomaxprocs = %d", c.GOMAXPROCS)
+		}
+	})
 }
 
-func TestJSONOmitsTraceWhenNotMeasured(t *testing.T) {
-	if out := string(renderJSON(t, sample(), Options{})); strings.Contains(out, `"trace"`) {
-		t.Error("без -trace секции trace в JSON быть не должно")
-	}
+// Отсутствие поля — такое же утверждение, как значение в нём.
+// «Не измеряли» и «измерили и вышли нули» для машины разные факты,
+// а переспросить она не может.
+func TestJSONAbsence(t *testing.T) {
+	t.Run("нет поправки без расписания", func(t *testing.T) {
+		out := string(renderJSON(t, sample(), Options{OpenLoop: false}))
 
-	var got struct {
-		Trace *struct {
-			Traced  int `json:"traced"`
-			Reused  int `json:"reused"`
-			Connect struct {
-				Samples int `json:"samples"`
-			} `json:"connect"`
-		} `json:"trace"`
-	}
-	decodeJSON(t, traced(), Options{}, &got)
+		if strings.Contains(out, "corrected") || strings.Contains(out, "max_lag_ms") {
+			t.Error("в closed-loop полей поправки быть не должно: иначе потребитель решит, что расписание было")
+		}
+	})
 
-	if got.Trace == nil || got.Trace.Traced != 1000 || got.Trace.Reused != 998 {
-		t.Errorf("trace = %+v", got.Trace)
-	}
-	if got.Trace.Connect.Samples != 2 {
-		t.Errorf("connect.samples = %d, ожидалось 2", got.Trace.Connect.Samples)
-	}
-}
+	t.Run("нет фаз без -trace", func(t *testing.T) {
+		if out := string(renderJSON(t, sample(), Options{})); strings.Contains(out, `"trace"`) {
+			t.Error("без -trace секции trace в JSON быть не должно")
+		}
 
-func TestJSONOnEmptyRun(t *testing.T) {
-	empty := stats.Summary{Codes: map[int]int{}, Errors: map[stats.ErrorKind]int{}}
+		var got struct {
+			Trace *struct {
+				Traced  int `json:"traced"`
+				Reused  int `json:"reused"`
+				Connect struct {
+					Samples int `json:"samples"`
+				} `json:"connect"`
+			} `json:"trace"`
+		}
+		decodeJSON(t, traced(), Options{}, &got)
 
-	var fields map[string]any
-	decodeJSON(t, empty, Options{}, &fields)
-	if fields["histogram"] == nil {
-		t.Error("histogram должен быть [], а не null — потребителю проще итерироваться")
-	}
-}
+		if got.Trace == nil || got.Trace.Traced != 1000 || got.Trace.Reused != 998 {
+			t.Errorf("trace = %+v", got.Trace)
+		}
+		if got.Trace.Connect.Samples != 2 {
+			t.Errorf("connect.samples = %d, ожидалось 2", got.Trace.Connect.Samples)
+		}
+	})
 
-// Заголовок отчёта не должен читаться как успех, когда сервис отдавал
-// одни отказы: ровно эта строка раньше и врала.
+	// Для машины недостоверный перцентиль — null, а не число: переспросить
+	// она не может, и любое число примет за факт.
+	t.Run("null вместо недостоверного перцентиля", func(t *testing.T) {
+		s := sample()
+		s.Latency.Samples = 50
 
-func TestJSONReportsOutcomesSeparately(t *testing.T) {
-	var got struct {
-		Total       int     `json:"total"`
-		OK          int     `json:"ok"`
-		NonOK       int     `json:"non_2xx"`
-		Failed      int     `json:"failed"`
-		SuccessRate float64 `json:"success_rate"`
-	}
+		var got struct {
+			Latency struct {
+				Samples int      `json:"samples"`
+				P50Ms   *float64 `json:"p50_ms"`
+				P99Ms   *float64 `json:"p99_ms"`
+				MaxMs   float64  `json:"max_ms"`
+			} `json:"latency"`
+		}
+		decodeJSON(t, s, Options{}, &got)
 
-	decodeJSON(t, sample(), Options{}, &got)
+		if got.Latency.Samples != 50 {
+			t.Errorf("samples = %d, ожидалось 50", got.Latency.Samples)
+		}
+		if got.Latency.P99Ms != nil {
+			t.Errorf("p99_ms = %v, ожидался null на 50 замерах", *got.Latency.P99Ms)
+		}
+		if got.Latency.P50Ms == nil {
+			t.Error("p50_ms обнулён, хотя порог для него всего 20 замеров")
+		}
+		// max — не перцентиль, он остаётся числом при любой выборке
+		if got.Latency.MaxMs != 90 {
+			t.Errorf("max_ms = %v, ожидалось 90", got.Latency.MaxMs)
+		}
+	})
 
-	if got.Total != 100 || got.OK != 90 || got.NonOK != 8 || got.Failed != 2 {
-		t.Errorf("исходы: %+v", got)
-	}
-	if got.SuccessRate != 0.9 {
-		t.Errorf("success_rate = %v, ожидалось 0.9", got.SuccessRate)
-	}
-}
+	t.Run("пустая гистограмма это [], а не null", func(t *testing.T) {
+		empty := stats.Summary{Codes: map[int]int{}, Errors: map[stats.ErrorKind]int{}}
 
-// Строка прогрева появляется только когда он был: постоянный «Прогрев: 0»
-// приучает не читать шапку.
-
-func TestJSONReportsWarmup(t *testing.T) {
-	s := sample()
-	s.Warmup = 42
-
-	var got struct {
-		Warmup int `json:"warmup_discarded"`
-	}
-	decodeJSON(t, s, Options{}, &got)
-	if got.Warmup != 42 {
-		t.Errorf("warmup_discarded = %d, ожидалось 42", got.Warmup)
-	}
-}
-
-func TestJSONReportsMeasurementWindow(t *testing.T) {
-	s := sample()
-	s.Elapsed, s.Window = 6*time.Second, 1500*time.Millisecond
-
-	var got struct {
-		ElapsedMs float64 `json:"elapsed_ms"`
-		WindowMs  float64 `json:"window_ms"`
-	}
-	decodeJSON(t, s, Options{}, &got)
-
-	if got.ElapsedMs != 6000 || got.WindowMs != 1500 {
-		t.Errorf("elapsed_ms=%v window_ms=%v, ожидалось 6000 и 1500", got.ElapsedMs, got.WindowMs)
-	}
-}
-
-func TestJSONReportsRateShortfall(t *testing.T) {
-	s := sample()
-	s.TargetRate, s.RPS = 1000, 400
-
-	var got struct {
-		TargetRate    float64 `json:"target_rate"`
-		RateShortfall float64 `json:"rate_shortfall"`
-	}
-	decodeJSON(t, s, Options{}, &got)
-
-	if got.TargetRate != 1000 {
-		t.Errorf("target_rate = %v, ожидалось 1000", got.TargetRate)
-	}
-	if got.RateShortfall != 0.6 {
-		t.Errorf("rate_shortfall = %v, ожидалось 0.6", got.RateShortfall)
-	}
-}
-
-func TestJSONReportsLateDispatches(t *testing.T) {
-	s := sample()
-	s.Total, s.Late = 1000, 250
-
-	var got struct {
-		Late      int     `json:"late"`
-		LateShare float64 `json:"late_share"`
-	}
-	decodeJSON(t, s, Options{}, &got)
-	if got.Late != 250 || got.LateShare != 0.25 {
-		t.Errorf("late=%d late_share=%v, ожидалось 250 и 0.25", got.Late, got.LateShare)
-	}
-}
-
-// Для машины недостоверный перцентиль — null, а не число: переспросить
-// она не может, и любое число примет за факт.
-func TestJSONNullsUnreliablePercentiles(t *testing.T) {
-	s := sample()
-	s.Latency.Samples = 50
-
-	var got struct {
-		Latency struct {
-			Samples int      `json:"samples"`
-			P50Ms   *float64 `json:"p50_ms"`
-			P99Ms   *float64 `json:"p99_ms"`
-			MaxMs   float64  `json:"max_ms"`
-		} `json:"latency"`
-	}
-	decodeJSON(t, s, Options{}, &got)
-
-	if got.Latency.Samples != 50 {
-		t.Errorf("samples = %d, ожидалось 50", got.Latency.Samples)
-	}
-	if got.Latency.P99Ms != nil {
-		t.Errorf("p99_ms = %v, ожидался null на 50 замерах", *got.Latency.P99Ms)
-	}
-	if got.Latency.P50Ms == nil {
-		t.Error("p50_ms обнулён, хотя порог для него всего 20 замеров")
-	}
-	// max — не перцентиль, он остаётся числом при любой выборке
-	if got.Latency.MaxMs != 90 {
-		t.Errorf("max_ms = %v, ожидалось 90", got.Latency.MaxMs)
-	}
-}
-
-func TestJSONReportsConfig(t *testing.T) {
-	opt := Options{Run: RunInfo{
-		Version:   "v0.1.1",
-		Proto:     "HTTP/2.0",
-		StartedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
-		Config: runner.Config{
-			URL: "http://example/api", Method: "POST",
-			Requests: 1000, Concurrency: 20, Rate: 500,
-			Timeout: 7 * time.Second, DisableKeepAlive: true,
-		},
-	}}
-
-	var got struct {
-		Config struct {
-			Version     string  `json:"version"`
-			URL         string  `json:"url"`
-			Method      string  `json:"method"`
-			Requests    int     `json:"requests"`
-			Concurrency int     `json:"concurrency"`
-			Rate        float64 `json:"rate"`
-			TimeoutMs   float64 `json:"timeout_ms"`
-			KeepAlive   bool    `json:"keepalive"`
-			Proto       string  `json:"proto"`
-			GOMAXPROCS  int     `json:"gomaxprocs"`
-			StartedAt   string  `json:"started_at"`
-		} `json:"config"`
-	}
-	decodeJSON(t, sample(), opt, &got)
-
-	c := got.Config
-	if c.Version != "v0.1.1" || c.URL != "http://example/api" || c.Method != "POST" {
-		t.Errorf("цель и версия: %+v", c)
-	}
-	if c.Requests != 1000 || c.Concurrency != 20 || c.Rate != 500 || c.TimeoutMs != 7000 {
-		t.Errorf("флаги прогона: %+v", c)
-	}
-	if c.KeepAlive {
-		t.Error("keepalive=true при -disable-keepalive")
-	}
-	if c.Proto != "HTTP/2.0" || c.StartedAt != "2026-08-28T12:00:00Z" {
-		t.Errorf("протокол и время: proto=%q started_at=%q", c.Proto, c.StartedAt)
-	}
-	if c.GOMAXPROCS < 1 {
-		t.Errorf("gomaxprocs = %d", c.GOMAXPROCS)
-	}
+		var fields map[string]any
+		decodeJSON(t, empty, Options{}, &fields)
+		if fields["histogram"] == nil {
+			t.Error("histogram должен быть [], а не null — потребителю проще итерироваться")
+		}
+	})
 }

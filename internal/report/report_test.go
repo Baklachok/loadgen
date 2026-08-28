@@ -149,114 +149,6 @@ func TestTraceBlock(t *testing.T) {
 	})
 }
 
-// Шапка — то немногое, что читают всегда. Каждая проверка здесь про
-// случай, когда она могла бы соврать или зашуметь.
-func TestTotals(t *testing.T) {
-	t.Run("поток не-2xx не читается как успех", func(t *testing.T) {
-		s := stats.Summary{
-			Total: 12500, OK: 0, NonOK: 12500,
-			Elapsed: 5 * time.Second, RPS: 2500,
-			Codes: map[int]int{429: 12500},
-		}
-
-		out := render(s, Options{Width: wide})
-
-		if !strings.Contains(out, "0 (0.0%)") {
-			t.Errorf("доли 2xx нет в шапке:\n%s", out)
-		}
-		if !strings.Contains(out, "12500") {
-			t.Error("число не-2xx не показано")
-		}
-		// «Успешно: 12500» в любом виде — это та самая ложь
-		for _, line := range strings.Split(out, "\n") {
-			if strings.Contains(line, "Успешно") && strings.Contains(line, "12500") {
-				t.Errorf("строка читается как успех: %q", strings.TrimSpace(line))
-			}
-		}
-	})
-
-	t.Run("прогрев показан, только если он был", func(t *testing.T) {
-		const marker = "Прогрев:"
-
-		if strings.Contains(render(sample(), Options{Width: wide}), marker) {
-			t.Error("строка прогрева печатается, хотя прогрева не было")
-		}
-
-		s := sample()
-		s.Warmup = 100
-
-		out := render(s, Options{Width: wide})
-		if !strings.Contains(out, marker) || !strings.Contains(out, "100 отброшено") {
-			t.Errorf("прогрев не показан в шапке:\n%s", out)
-		}
-	})
-
-	// Строка «Измерялось» появляется, только когда окно отличается от прогона:
-	// без прогрева это был бы дубль строки выше.
-	t.Run("окно измерения — только при прогреве", func(t *testing.T) {
-		const marker = "Измерялось:"
-
-		// Без прогрева окно всё равно на волосок короче прогона — строки быть
-		// не должно именно поэтому, а не из-за точного равенства.
-		same := sample()
-		same.Elapsed, same.Window = 2*time.Second, 2*time.Second-317*time.Microsecond
-		if strings.Contains(render(same, Options{Width: wide}), marker) {
-			t.Error("окно напечатано, хотя прогрева не было")
-		}
-
-		shortened := sample()
-		shortened.Warmup = 50
-		shortened.Elapsed, shortened.Window = 6*time.Second, time.Second
-		out := render(shortened, Options{Width: wide})
-
-		if !strings.Contains(out, marker) {
-			t.Errorf("окно не показано, хотя короче прогона:\n%s", out)
-		}
-		if !strings.Contains(out, "1s") || !strings.Contains(out, "6s") {
-			t.Errorf("в шапке нет обоих значений:\n%s", out)
-		}
-	})
-
-	t.Run("достигнутая частота рядом с заданной", func(t *testing.T) {
-		closed := sample()
-		closed.RPS = 1500
-		if out := render(closed, Options{Width: wide}); strings.Contains(out, "заданных") {
-			t.Error("в closed-loop не с чем сравнивать, а цель напечатана")
-		}
-
-		open := sample()
-		open.TargetRate, open.RPS = 1000, 995 // недобор полпроцента — шум
-		out := render(open, Options{Width: wide})
-
-		if !strings.Contains(out, "995.0 из 1000 заданных") {
-			t.Errorf("достигнутое не поставлено рядом с заданным:\n%s", out)
-		}
-		if strings.Contains(out, "не удержана") {
-			t.Error("предупреждение на расхождении в полпроцента")
-		}
-	})
-
-	// Пока не выяснено, кто не удержал частоту, остальные цифры интерпретировать
-	// нельзя — поэтому предупреждение обязано быть в отчёте, а не в stderr.
-	t.Run("предупреждение при реальном недоборе", func(t *testing.T) {
-		s := sample()
-		s.TargetRate, s.RPS = 1000, 480
-
-		out := render(s, Options{Width: wide})
-
-		if !strings.Contains(out, "(−52%)") {
-			t.Errorf("недобор не показан рядом с числом:\n%s", out)
-		}
-		if !strings.Contains(out, "не удержана") {
-			t.Errorf("нет предупреждения при недоборе вдвое:\n%s", out)
-		}
-		// Предупреждение должно стоять до цифр, которые оно ставит под сомнение
-		if warn, lat := strings.Index(out, "не удержана"), strings.Index(out, "Latency"); warn > lat {
-			t.Error("предупреждение напечатано после блока latency")
-		}
-	})
-}
-
 // Блок latency: поправка на расписание и отказ печатать перцентили,
 // на которые не набралось замеров.
 func TestLatencyBlock(t *testing.T) {
@@ -390,8 +282,167 @@ func TestProvenance(t *testing.T) {
 	})
 }
 
-// Предупреждения, ставящие под сомнение остальные цифры прогона.
-func TestWarnings(t *testing.T) {
+// Частичный результат, неотличимый от полного, — будущий скриншот в чате
+// с подписью «сервис держит 4000 rps», сделанный по прерванному прогону.
+func TestPartialRun(t *testing.T) {
+	t.Run("молчит на полном прогоне", func(t *testing.T) {
+		if strings.Contains(render(sample(), Options{Width: wide}), "ПРЕРВАНО") {
+			t.Error("пометка на непрерванном прогоне")
+		}
+	})
+
+	t.Run("режим -n: доля запросов", func(t *testing.T) {
+		s := sample()
+		s.Partial, s.Total, s.Warmup = true, 4213, 0
+
+		out := render(s, Options{Width: wide,
+			Run: RunInfo{Config: runner.Config{Requests: 100000}}})
+
+		if !strings.Contains(out, "ПРЕРВАНО") || !strings.Contains(out, "4213 запросов из 100000") {
+			t.Errorf("масштаб потери не показан:\n%s", out)
+		}
+		// Читатель должен увидеть пометку раньше цифр, которые она обесценивает
+		if p, tot := strings.Index(out, "ПРЕРВАНО"), strings.Index(out, "Всего:"); p > tot {
+			t.Error("пометка напечатана после счётчиков")
+		}
+	})
+
+	t.Run("режим -z: доля времени", func(t *testing.T) {
+		s := sample()
+		s.Partial, s.Elapsed = true, 12*time.Second
+
+		out := render(s, Options{Width: wide,
+			Run: RunInfo{Config: runner.Config{Duration: 60 * time.Second}}})
+
+		if !strings.Contains(out, "12s из 1m0s") {
+			t.Errorf("доля времени не показана:\n%s", out)
+		}
+	})
+
+	t.Run("прогрев входит в счёт потерянного", func(t *testing.T) {
+		s := sample()
+		s.Partial, s.Total, s.Warmup = true, 900, 100
+
+		out := render(s, Options{Width: wide,
+			Run: RunInfo{Config: runner.Config{Requests: 5000}}})
+
+		if !strings.Contains(out, "1000 запросов из 5000") {
+			t.Errorf("прогрев не учтён в отправленных:\n%s", out)
+		}
+	})
+}
+
+// Шапка со счётчиками: каждая проверка про случай, когда она могла бы
+// соврать или зашуметь.
+func TestTotals(t *testing.T) {
+	t.Run("поток не-2xx не читается как успех", func(t *testing.T) {
+		s := stats.Summary{
+			Total: 12500, OK: 0, NonOK: 12500,
+			Elapsed: 5 * time.Second, RPS: 2500,
+			Codes: map[int]int{429: 12500},
+		}
+
+		out := render(s, Options{Width: wide})
+
+		if !strings.Contains(out, "0 (0.0%)") {
+			t.Errorf("доли 2xx нет в шапке:\n%s", out)
+		}
+		if !strings.Contains(out, "12500") {
+			t.Error("число не-2xx не показано")
+		}
+		// «Успешно: 12500» в любом виде — это та самая ложь
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "Успешно") && strings.Contains(line, "12500") {
+				t.Errorf("строка читается как успех: %q", strings.TrimSpace(line))
+			}
+		}
+	})
+
+	t.Run("прогрев показан, только если он был", func(t *testing.T) {
+		const marker = "Прогрев:"
+
+		if strings.Contains(render(sample(), Options{Width: wide}), marker) {
+			t.Error("строка прогрева печатается, хотя прогрева не было")
+		}
+
+		s := sample()
+		s.Warmup = 100
+
+		out := render(s, Options{Width: wide})
+		if !strings.Contains(out, marker) || !strings.Contains(out, "100 отброшено") {
+			t.Errorf("прогрев не показан в шапке:\n%s", out)
+		}
+	})
+
+	// Строка «Измерялось» появляется, только когда окно отличается от прогона:
+	// без прогрева это был бы дубль строки выше.
+	t.Run("окно измерения — только при прогреве", func(t *testing.T) {
+		const marker = "Измерялось:"
+
+		// Без прогрева окно всё равно на волосок короче прогона — строки быть
+		// не должно именно поэтому, а не из-за точного равенства.
+		same := sample()
+		same.Elapsed, same.Window = 2*time.Second, 2*time.Second-317*time.Microsecond
+		if strings.Contains(render(same, Options{Width: wide}), marker) {
+			t.Error("окно напечатано, хотя прогрева не было")
+		}
+
+		shortened := sample()
+		shortened.Warmup = 50
+		shortened.Elapsed, shortened.Window = 6*time.Second, time.Second
+		out := render(shortened, Options{Width: wide})
+
+		if !strings.Contains(out, marker) {
+			t.Errorf("окно не показано, хотя короче прогона:\n%s", out)
+		}
+		if !strings.Contains(out, "1s") || !strings.Contains(out, "6s") {
+			t.Errorf("в шапке нет обоих значений:\n%s", out)
+		}
+	})
+}
+
+// Всё про заданную частоту в одном месте: раньше строка отчёта жила
+// в проверках шапки, а предупреждение о ней — в общей свалке.
+func TestRateReporting(t *testing.T) {
+	t.Run("достигнутая частота рядом с заданной", func(t *testing.T) {
+		closed := sample()
+		closed.RPS = 1500
+		if out := render(closed, Options{Width: wide}); strings.Contains(out, "заданных") {
+			t.Error("в closed-loop не с чем сравнивать, а цель напечатана")
+		}
+
+		open := sample()
+		open.TargetRate, open.RPS = 1000, 995 // недобор полпроцента — шум
+		out := render(open, Options{Width: wide})
+
+		if !strings.Contains(out, "995.0 из 1000 заданных") {
+			t.Errorf("достигнутое не поставлено рядом с заданным:\n%s", out)
+		}
+		if strings.Contains(out, "не удержана") {
+			t.Error("предупреждение на расхождении в полпроцента")
+		}
+	})
+
+	// Пока не выяснено, кто не удержал частоту, остальные цифры интерпретировать
+	// нельзя — поэтому предупреждение обязано быть в отчёте, а не в stderr.
+	t.Run("предупреждение при реальном недоборе", func(t *testing.T) {
+		s := sample()
+		s.TargetRate, s.RPS = 1000, 480
+
+		out := render(s, Options{Width: wide})
+
+		if !strings.Contains(out, "(−52%)") {
+			t.Errorf("недобор не показан рядом с числом:\n%s", out)
+		}
+		if !strings.Contains(out, "не удержана") {
+			t.Errorf("нет предупреждения при недоборе вдвое:\n%s", out)
+		}
+		// Предупреждение должно стоять до цифр, которые оно ставит под сомнение
+		if warn, lat := strings.Index(out, "не удержана"), strings.Index(out, "Latency"); warn > lat {
+			t.Error("предупреждение напечатано после блока latency")
+		}
+	})
+
 	// Массовые опоздания старта означают, что запросы не успевали уходить,
 	// — это потолок генератора, а не медленный сервис. Пока данных на такой
 	// вывод нет, предупреждение обязано честно называть обе версии.
@@ -429,7 +480,11 @@ func TestWarnings(t *testing.T) {
 			}
 		})
 	})
+}
 
+// Самый громкий вывод, который может сделать прогон: цифры описывают
+// не сервис, а нас.
+func TestClientSaturationWarning(t *testing.T) {
 	// Самый громкий вывод, который может сделать прогон: цифры описывают не
 	// сервис, а нас. Он обязан быть виден раньше самих цифр.
 	t.Run("упёрлись в клиента", func(t *testing.T) {

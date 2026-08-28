@@ -52,6 +52,7 @@ type section func(w io.Writer, s stats.Summary, opt Options, p palette)
 // Порядок вывода. Происхождение прогона идёт последним: первый экран должен
 // отвечать на вопрос, а справка нужна позже.
 var sections = []section{
+	writePartial,
 	writeTotals,
 	writeClientWarning,
 	writeRateWarning,

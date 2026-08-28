@@ -120,6 +120,11 @@ type Report struct {
 	// что просили.
 	StartedAt time.Time
 	Proto     string
+
+	// Interrupted — прогон оборвали сигналом, а не расписанием. Отчёт обязан
+	// это показать: частичный результат, неотличимый от полного, становится
+	// скриншотом «держим 4000 rps», сделанным по прерванному прогону.
+	Interrupted bool
 }
 
 func Run(ctx context.Context, cfg Config) (Report, error) {
@@ -172,6 +177,8 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		TargetRate: cfg.Rate,
 		StartedAt:  e.runStart,
 		Proto:      e.observedProto(),
+		// Дедлайн -z живёт в runCtx; отменённым ctx бывает только по сигналу.
+		Interrupted: ctx.Err() != nil,
 	}, nil
 }
 

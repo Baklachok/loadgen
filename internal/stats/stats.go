@@ -10,6 +10,9 @@ type Summary struct {
 	Total  int // измеренных запросов, без прогрева
 	Warmup int // отброшено как прогрев
 
+	// Partial — прогон оборван сигналом, цифры собраны не по всему плану.
+	Partial bool
+
 	// Три исхода, а не два. 429 и таймаут — разные события: первый означает,
 	// что сервер работает и отказывает, второй — что ответа не было вовсе.
 	// Слепить их вместе значит либо отчитаться об успехе там, где сервис
@@ -111,6 +114,7 @@ func Compute(rep runner.Report) Summary {
 		Elapsed:    rep.Elapsed,
 		Window:     rep.Window,
 		TargetRate: rep.TargetRate,
+		Partial:    rep.Interrupted,
 		Codes:      make(map[int]int),
 		Errors:     make(map[ErrorKind]int),
 	}

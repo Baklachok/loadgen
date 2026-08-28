@@ -90,7 +90,7 @@ loadgen -n 5000 -c 50 -slo-p99 200ms -slo-error-rate 1 http://localhost:8080
 
 ### JSON
 
-Длительности в миллисекундах. Блоки `corrected` и `max_lag_ms` появляются только в open-loop, где расписание действительно было.
+Длительности в миллисекундах. Блоки `corrected` и `max_lag_ms` появляются только в open-loop, где расписание действительно было. У прерванного прогона `partial: true` — цифры собраны не по всему плану.
 
 ```bash
 $ loadgen -z 5s -rate 500 -c 200 -o json http://localhost:8080 \

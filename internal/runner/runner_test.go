@@ -144,3 +144,28 @@ func TestNoGoroutineLeak(t *testing.T) {
 		})
 	}
 }
+
+// Дедлайн -z и сигнал — разные события: первый штатный конец прогона,
+// второй обрыв, и отчёт обязан их различать.
+func TestReportMarksInterruption(t *testing.T) {
+	srv := sleepServer(t, 5*time.Millisecond)
+
+	t.Run("дедлайн -z прерыванием не считается", func(t *testing.T) {
+		rep := mustRunReport(t, context.Background(), durationConfig(srv, 300*time.Millisecond))
+		if rep.Interrupted {
+			t.Error("штатное окончание по -z помечено прерыванием")
+		}
+	})
+
+	t.Run("отменённый контекст считается", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+
+		cfg := requestsConfig(srv, 100000)
+		cfg.Concurrency = 10
+
+		if rep := mustRunReport(t, ctx, cfg); !rep.Interrupted {
+			t.Error("обрыв по контексту не помечен")
+		}
+	})
+}

@@ -77,6 +77,7 @@ type jsonSummary struct {
 
 	Total         int     `json:"total"`
 	Warmup        int     `json:"warmup_discarded"`
+	Partial       bool    `json:"partial"`
 	OK            int     `json:"ok"`
 	NonOK         int     `json:"non_2xx"`
 	Failed        int     `json:"failed"`
@@ -93,6 +94,10 @@ type jsonSummary struct {
 	BytesRead     int64   `json:"bytes_read"`
 	ThroughputMBs float64 `json:"throughput_mb_s"`
 
+	// Необязательные блоки — указатели, и это осознанный отказ от Null Object:
+	// пустая структура на месте отсутствующей подменила бы «не измеряли»
+	// на «измерили и вышли нули». Для машинного потребителя это разные факты,
+	// и переспросить он не может.
 	Latency jsonLatencies `json:"latency"`
 	// В closed-loop поправки нет — поля не должны появляться вовсе,
 	// иначе потребитель решит, что расписание было и оно совпало.
@@ -159,6 +164,7 @@ func summaryJSON(s stats.Summary, opt Options) jsonSummary {
 		Config:        runConfig(opt.Run),
 		Total:         s.Total,
 		Warmup:        s.Warmup,
+		Partial:       s.Partial,
 		OK:            s.OK,
 		NonOK:         s.NonOK,
 		Failed:        s.Failed,
@@ -177,9 +183,8 @@ func summaryJSON(s stats.Summary, opt Options) jsonSummary {
 		Histogram:     buckets(s.Histogram),
 		Codes:         s.Codes,
 		Errors:        s.Errors,
+		Trace:         traceJSON(s.Trace),
 	}
-
-	out.Trace = traceJSON(s.Trace)
 
 	// В closed-loop расписания не было, и поправка к нему бессмысленна.
 	if opt.OpenLoop {
