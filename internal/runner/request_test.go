@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"testing"
@@ -113,6 +114,40 @@ func TestStatusCodesRecorded(t *testing.T) {
 
 // Клиент намеренно не ходит по редиректам: мерить надо тот ответ, что отдал
 // сервер, а не то, куда он перенаправил.
+// Сервис, сбрасывающий нагрузку пятисотками и рвущий соединения, обязан
+// отличаться от недоступного: код ответа — единственное, что их различает,
+// и раньше он терялся вместе с оборванным телом.
+func TestStatusCodeSurvivesTruncatedBody(t *testing.T) {
+	// Content-Length обещает больше, чем будет отдано, после чего соединение
+	// закрывается: заголовки с кодом клиент получает, тело — нет.
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err) // не Fatal: чужая горутина
+			return
+		}
+		defer conn.Close()
+
+		fmt.Fprint(buf, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 100\r\n\r\n")
+		buf.WriteString("частичное тело")
+		buf.Flush()
+	})
+
+	res := mustRun(t, context.Background(), requestsConfig(srv, 5))
+
+	for i, r := range res {
+		if r.Err == nil {
+			t.Errorf("результат %d: обрыв тела не дал ошибки", i)
+		}
+		if r.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("результат %d: код %d, ожидался 503 — иначе сервис неотличим от недоступного", i, r.StatusCode)
+		}
+		if r.BytesRead == 0 {
+			t.Errorf("результат %d: байты до обрыва потеряны", i)
+		}
+	}
+}
+
 func TestRedirectsNotFollowed(t *testing.T) {
 	var rec recorder
 

@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"syscall"
@@ -33,6 +34,11 @@ func TestClassify(t *testing.T) {
 		{"имя не разрешилось", &net.DNSError{Err: "no such host"}, ErrDNS},
 		{"сетевой таймаут", netTimeout{}, ErrTimeout},
 		{"сертификат не проверен", &tls.CertificateVerificationError{}, ErrTLS},
+		{"тело оборвалось", io.ErrUnexpectedEOF, ErrTruncated},
+		// Голый io.EOF транспорт отдаёт, когда сервер закрыл соединение,
+		// не ответив вовсе. Записать его в обрыв тела значило бы объявить
+		// ответ там, где его не было.
+		{"EOF без ответа — не обрыв тела", io.EOF, ErrOtherKind},
 		{"что-то ещё", errors.New("boom"), ErrOtherKind},
 
 		// net/http заворачивает ошибки в url.Error, поэтому errors.Is/As
@@ -40,6 +46,7 @@ func TestClassify(t *testing.T) {
 		{"обёрнутый отказ", fmt.Errorf(`Get "http://x": %w`, syscall.ECONNREFUSED), ErrRefused},
 		{"дважды обёрнутый дедлайн", fmt.Errorf("a: %w", fmt.Errorf("b: %w", context.DeadlineExceeded)), ErrTimeout},
 		{"обёрнутый DNS", fmt.Errorf("lookup: %w", &net.DNSError{Err: "server misbehaving"}), ErrDNS},
+		{"обёрнутый обрыв тела", fmt.Errorf("read body: %w", io.ErrUnexpectedEOF), ErrTruncated},
 	}
 
 	for _, tt := range tests {

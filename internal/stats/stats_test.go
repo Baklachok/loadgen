@@ -2,6 +2,7 @@ package stats
 
 import (
 	"context"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -12,8 +13,11 @@ import (
 	"github.com/Baklachok/loadgen/internal/runner"
 )
 
-func TestCompute(t *testing.T) {
-
+// Сквозная проверка: один смешанный прогон должен заполнить все headline-поля.
+// Правила проверяются группами ниже, здесь — что они между собой соединены.
+// Именно такие поломки группы и пропускают: каждая своё правило подтвердит,
+// а провод между ними никто не дёрнет.
+func TestComputeFillsSummary(t *testing.T) {
 	results := []runner.Result{
 		{Duration: ms(10), StatusCode: 200, BytesRead: 100},
 		{Duration: ms(20), StatusCode: 200, BytesRead: 100},
@@ -24,13 +28,13 @@ func TestCompute(t *testing.T) {
 	s := compute(results, 2*time.Second)
 
 	if s.Total != 4 || s.OK != 2 || s.NonOK != 1 || s.Failed != 1 {
-		t.Errorf("counts: total=%d ok=%d non2xx=%d failed=%d", s.Total, s.OK, s.NonOK, s.Failed)
+		t.Errorf("исходы: total=%d ok=%d non2xx=%d failed=%d", s.Total, s.OK, s.NonOK, s.Failed)
 	}
 	if s.RPS != 1.5 {
-		t.Errorf("RPS = %v, want 1.5", s.RPS)
+		t.Errorf("RPS = %v, ожидалось 1.5", s.RPS)
 	}
 	if s.Latency.Mean != ms(20) {
-		t.Errorf("Mean = %v, want 20ms", s.Latency.Mean)
+		t.Errorf("Mean = %v, ожидалось 20ms", s.Latency.Mean)
 	}
 	if s.Codes[200] != 2 || s.Codes[500] != 1 {
 		t.Errorf("codes = %v", s.Codes)
@@ -115,24 +119,24 @@ func TestHistogram(t *testing.T) {
 			t.Error("между горбами нет пустых бакетов — разрыв не читается")
 		}
 	})
-}
 
-func TestComputeFillsHistogram(t *testing.T) {
-	results := []runner.Result{
-		resp(200, ms(10)),
-		resp(200, ms(20)),
-		failed(context.DeadlineExceeded, ms(5)),
-	}
+	// Гистограмма собирается из тех же замеров, что и перцентили: запрос
+	// без полного ответа замера не даёт и в картинку попасть не может.
+	t.Run("Compute кладёт в неё все полученные ответы", func(t *testing.T) {
+		s := compute([]runner.Result{
+			resp(200, ms(10)),
+			resp(200, ms(20)),
+			failed(context.DeadlineExceeded, ms(5)),
+		}, time.Second)
 
-	s := compute(results, time.Second)
-
-	total := 0
-	for _, b := range s.Histogram {
-		total += b.Count
-	}
-	if total != s.Responses() {
-		t.Errorf("в гистограмме %d замеров, полученных ответов %d", total, s.Responses())
-	}
+		total := 0
+		for _, b := range s.Histogram {
+			total += b.Count
+		}
+		if total != s.Responses() {
+			t.Errorf("в гистограмме %d замеров, полученных ответов %d", total, s.Responses())
+		}
+	})
 }
 
 func TestComputeOutcomes(t *testing.T) {
@@ -206,6 +210,68 @@ func TestComputeOutcomes(t *testing.T) {
 		}
 		if s.Latency.Max != ms(2) {
 			t.Errorf("max = %v: таймаут просочился в перцентили и утопил их", s.Latency.Max)
+		}
+	})
+
+	// Сервис, сбрасывающий нагрузку пятисотками и рвущий соединения, раньше
+	// выглядел ровно как недоступный: код терялся вместе с телом.
+	t.Run("оборванное тело — четвёртый исход", func(t *testing.T) {
+		s := compute([]runner.Result{
+			resp(200, ms(1)),
+			failed(context.DeadlineExceeded, ms(10000)),
+			truncated(503, io.ErrUnexpectedEOF, 27),
+		}, time.Second)
+
+		if s.OK != 1 || s.NonOK != 0 || s.Failed != 1 || s.Truncated != 1 {
+			t.Errorf("исходы: OK=%d NonOK=%d Failed=%d Truncated=%d, ожидалось 1/0/1/1",
+				s.OK, s.NonOK, s.Failed, s.Truncated)
+		}
+		if got := s.OK + s.NonOK + s.Failed + s.Truncated; got != s.Total {
+			t.Errorf("сумма исходов %d, а Total %d: шапка перестала сходиться", got, s.Total)
+		}
+
+		// Код — единственное, что отличает «сервис отказывает» от «сервиса нет»
+		if s.Codes[503] != 1 {
+			t.Errorf("codes = %v: код оборванного ответа потерян", s.Codes)
+		}
+		if s.Errors[ErrTruncated] != 1 {
+			t.Errorf("errors = %v: причина обрыва потеряна", s.Errors)
+		}
+
+		// Полного ответа не было — в RPS он идти не должен
+		if s.Responses() != 1 {
+			t.Errorf("Responses = %d, ожидался 1: оборванный завысил бы RPS", s.Responses())
+		}
+		// Длительность оборванного запроса неполна, перцентилям она чужая
+		if s.Latency.Samples != 1 {
+			t.Errorf("замеров %d, ожидался 1: оборванный попал в перцентили", s.Latency.Samples)
+		}
+		// Байты, прочитанные до обрыва, прочитаны на самом деле
+		if s.BytesRead != 27 {
+			t.Errorf("BytesRead = %d, ожидалось 27: throughput занижен на долю обрывов", s.BytesRead)
+		}
+	})
+
+	// Ненулевой ClientErrors обесценивает весь прогон: цифры описывают
+	// не сервис, а нас. Поэтому это подмножество Failed считается отдельно.
+	t.Run("клиентские отказы выделены из прочих", func(t *testing.T) {
+		fdLimit := &net.OpError{Op: "dial", Err: os.NewSyscallError("socket", syscall.EMFILE)}
+
+		s := compute([]runner.Result{
+			failed(fdLimit, ms(1)),
+			failed(fdLimit, ms(1)),
+			failed(syscall.ECONNREFUSED, ms(1)),
+			resp(200, ms(5)),
+		}, time.Second)
+
+		if s.Failed != 3 {
+			t.Errorf("Failed = %d, ожидалось 3", s.Failed)
+		}
+		if s.ClientErrors != 2 {
+			t.Errorf("ClientErrors = %d, ожидалось 2: отказ в соединении — не наш лимит", s.ClientErrors)
+		}
+		if s.Errors[ErrFDLimit] != 2 {
+			t.Errorf("в разбивке %d дескрипторных ошибок", s.Errors[ErrFDLimit])
 		}
 	})
 }
@@ -362,29 +428,6 @@ func TestComputeRates(t *testing.T) {
 			})
 		}
 	})
-}
-
-// Ненулевой ClientErrors обесценивает весь прогон, поэтому считается отдельно
-// от прочих отказов.
-func TestComputeCountsClientErrors(t *testing.T) {
-	fdLimit := &net.OpError{Op: "dial", Err: os.NewSyscallError("socket", syscall.EMFILE)}
-
-	s := compute([]runner.Result{
-		failed(fdLimit, ms(1)),
-		failed(fdLimit, ms(1)),
-		failed(syscall.ECONNREFUSED, ms(1)),
-		resp(200, ms(5)),
-	}, time.Second)
-
-	if s.Failed != 3 {
-		t.Errorf("Failed = %d, ожидалось 3", s.Failed)
-	}
-	if s.ClientErrors != 2 {
-		t.Errorf("ClientErrors = %d, ожидалось 2: отказ в соединении — не наш лимит", s.ClientErrors)
-	}
-	if s.Errors[ErrFDLimit] != 2 {
-		t.Errorf("в разбивке %d дескрипторных ошибок", s.Errors[ErrFDLimit])
-	}
 }
 
 // Перцентили: сам расчёт, достаточность выборки и таблица квантилей.

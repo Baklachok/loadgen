@@ -33,6 +33,14 @@ func writeTotals(w io.Writer, s stats.Summary, _ Options, p palette) {
 	row("Успешно (2xx):", p.green(fmt.Sprintf("%d (%.1f%%)", s.OK, s.SuccessRate()*100)))
 	row("Не-2xx:", highlightNonZero(s.NonOK, p.yellow))
 	row("Без ответа:", highlightNonZero(s.Failed, p.red))
+
+	// Только когда обрывы были: вечное «Оборвано: 0» приучает не читать шапку,
+	// как приучал бы «Прогрев: 0» выше. Скобка объясняет, почему сумма
+	// по кодам ниже больше числа ответов.
+	if s.Truncated > 0 {
+		row("Оборвано:", p.red(fmt.Sprintf("%d (код получен, тело — нет)", s.Truncated)))
+	}
+
 	row("Время:", s.Elapsed.Round(time.Millisecond).String())
 
 	// Условие — «был ли прогрев», а не «отличаются ли длительности»: окно

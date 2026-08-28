@@ -24,22 +24,44 @@ import (
 // счётчики под `summary`, но верхнеуровневые headline-числа дают `jq .rps`
 // вместо `jq .summary.rps`, и примеры в README уже такие. Менять форму ради
 // симметрии в момент её заморозки — худший из моментов.
-const schemaVersion = 1
+//
+// История версий — по строке на бамп, чтобы потребитель понимал, что для него
+// изменилось, не читая коммиты:
+//
+//	2 — появился исход truncated, и failed сузился: оборванные ответы больше
+//	    в него не входят. Гейт по failed перестанет их ловить, если не добавить
+//	    truncated. Само поле truncated — добавление и версию бы не двигало;
+//	    двигает её смена смысла у failed.
+//	1 — первая зафиксированная форма.
+const schemaVersion = 2
 
 type jsonSummary struct {
 	Schema int        `json:"schema"`
 	Config jsonConfig `json:"config"`
 
-	Total         int     `json:"total"`
-	Warmup        int     `json:"warmup_discarded"`
-	Partial       bool    `json:"partial"`
-	OK            int     `json:"ok"`
-	NonOK         int     `json:"non_2xx"`
-	Failed        int     `json:"failed"`
-	ClientErrors  int     `json:"client_errors"`
-	SuccessRate   float64 `json:"success_rate"`
-	ElapsedMs     float64 `json:"elapsed_ms"`
-	WindowMs      float64 `json:"window_ms"`
+	// Порядок полей — это порядок ключей в документе: encoding/json пишет их
+	// как объявлены. Группы разделены пустыми строками, а не перестановкой.
+
+	Total   int  `json:"total"`
+	Warmup  int  `json:"warmup_discarded"`
+	Partial bool `json:"partial"`
+
+	// Четыре исхода, дающие в сумме total. non_2xx и truncated разведены
+	// не ради симметрии: сервис, отдающий отказы, и сервис, рвущий соединения,
+	// требуют противоположных действий, а выглядели одинаково.
+	OK        int `json:"ok"`
+	NonOK     int `json:"non_2xx"`
+	Failed    int `json:"failed"`
+	Truncated int `json:"truncated"`
+
+	// client_errors — подмножество failed: кончились ресурсы у нас, а не
+	// у сервиса. Ненулевое значение обесценивает весь документ.
+	ClientErrors int     `json:"client_errors"`
+	SuccessRate  float64 `json:"success_rate"`
+
+	ElapsedMs float64 `json:"elapsed_ms"`
+	WindowMs  float64 `json:"window_ms"`
+
 	RPS           float64 `json:"rps"`
 	TargetRate    float64 `json:"target_rate"`
 	RateShortfall float64 `json:"rate_shortfall"`
@@ -183,23 +205,30 @@ func writeJSON(w io.Writer, s stats.Summary, opt Options) error {
 
 func summaryJSON(s stats.Summary, opt Options) jsonSummary {
 	out := jsonSummary{
-		Schema:        schemaVersion,
-		Config:        configJSON(opt.Run),
-		Total:         s.Total,
-		Warmup:        s.Warmup,
-		Partial:       s.Partial,
-		OK:            s.OK,
-		NonOK:         s.NonOK,
-		Failed:        s.Failed,
-		ClientErrors:  s.ClientErrors,
-		SuccessRate:   s.SuccessRate(),
-		ElapsedMs:     ms(s.Elapsed),
-		WindowMs:      ms(s.Window),
+		Schema: schemaVersion,
+		Config: configJSON(opt.Run),
+
+		Total:   s.Total,
+		Warmup:  s.Warmup,
+		Partial: s.Partial,
+
+		OK:        s.OK,
+		NonOK:     s.NonOK,
+		Failed:    s.Failed,
+		Truncated: s.Truncated,
+
+		ClientErrors: s.ClientErrors,
+		SuccessRate:  s.SuccessRate(),
+
+		ElapsedMs: ms(s.Elapsed),
+		WindowMs:  ms(s.Window),
+
 		RPS:           s.RPS,
 		TargetRate:    s.TargetRate,
 		RateShortfall: s.RateShortfall(),
 		Late:          s.Late,
 		LateShare:     s.LateShare(),
+
 		BytesRead:     s.BytesRead,
 		ThroughputMBs: s.Throughput,
 		Latency:       latenciesJSON(s.Latency),

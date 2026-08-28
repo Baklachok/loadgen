@@ -10,8 +10,9 @@ import (
 
 func ms(n int) time.Duration { return time.Duration(n) * time.Millisecond }
 
-// resp — сервер ответил, failed — ответа не было. Два конструктора вместо
-// литералов runner.Result по всему файлу: в тестах важен исход, а не поля.
+// resp — сервер ответил целиком, failed — ответа не было вовсе,
+// truncated — код пришёл, тело оборвалось. Конструкторы вместо литералов
+// runner.Result по всему файлу: в тестах важен исход, а не поля.
 
 func resp(code int, d time.Duration) runner.Result {
 	return runner.Result{Duration: d, StatusCode: code}
@@ -19,6 +20,12 @@ func resp(code int, d time.Duration) runner.Result {
 
 func failed(err error, d time.Duration) runner.Result {
 	return runner.Result{Duration: d, Err: err}
+}
+
+// truncated — заголовки с кодом пришли, тело оборвалось. Код и ошибка вместе
+// и есть признак обрыва: так их выставляет runner.
+func truncated(code int, err error, read int64) runner.Result {
+	return runner.Result{StatusCode: code, Err: err, BytesRead: read}
 }
 
 func tenMs() []time.Duration {

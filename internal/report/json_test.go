@@ -62,16 +62,24 @@ func TestJSONFields(t *testing.T) {
 			OK          int     `json:"ok"`
 			NonOK       int     `json:"non_2xx"`
 			Failed      int     `json:"failed"`
+			Truncated   int     `json:"truncated"`
 			SuccessRate float64 `json:"success_rate"`
 		}
 
-		decodeJSON(t, sample(), Options{}, &got)
+		s := sample()
+		s.Total, s.Truncated = 104, 4
+		decodeJSON(t, s, Options{}, &got)
 
-		if got.Total != 100 || got.OK != 90 || got.NonOK != 8 || got.Failed != 2 {
+		if got.Total != 104 || got.OK != 90 || got.NonOK != 8 || got.Failed != 2 || got.Truncated != 4 {
 			t.Errorf("исходы: %+v", got)
 		}
-		if got.SuccessRate != 0.9 {
-			t.Errorf("success_rate = %v, ожидалось 0.9", got.SuccessRate)
+		// Четыре исхода обязаны сходиться с общим числом, иначе документ
+		// противоречит сам себе, а переспросить потребителю некого.
+		if sum := got.OK + got.NonOK + got.Failed + got.Truncated; sum != got.Total {
+			t.Errorf("сумма исходов %d, а total %d", sum, got.Total)
+		}
+		if got.SuccessRate != 90.0/104 {
+			t.Errorf("success_rate = %v, ожидалось %v", got.SuccessRate, 90.0/104)
 		}
 	})
 

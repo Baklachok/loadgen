@@ -129,7 +129,17 @@ func (e *engine) do(ctx context.Context) Result {
 
 	n, err := io.Copy(io.Discard, resp.Body)
 	if err != nil {
-		return Result{Duration: time.Since(start), Err: err, BytesRead: n, Trace: t.snapshot()}
+		// Код ответа переносим и сюда: заголовки уже пришли, и «503, тело
+		// оборвалось» — это совсем не то же самое, что «сервис недоступен».
+		// Тот же случай, что и с proto выше: знание из частично прочитанного
+		// ответа терять незачем.
+		return Result{
+			Duration:   time.Since(start),
+			StatusCode: resp.StatusCode,
+			Err:        err,
+			BytesRead:  n,
+			Trace:      t.snapshot(),
+		}
 	}
 	return Result{
 		Duration:   time.Since(start),

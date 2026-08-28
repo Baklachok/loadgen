@@ -13,13 +13,22 @@ type Summary struct {
 	// Partial — прогон оборван сигналом, цифры собраны не по всему плану.
 	Partial bool
 
-	// Три исхода, а не два. 429 и таймаут — разные события: первый означает,
+	// Четыре исхода, а не два. 429 и таймаут — разные события: первый означает,
 	// что сервер работает и отказывает, второй — что ответа не было вовсе.
 	// Слепить их вместе значит либо отчитаться об успехе там, где сервис
 	// отдавал одни отказы, либо утопить перцентили в значении таймаута.
 	OK     int // ответ 2xx
 	NonOK  int // ответ получен, но не 2xx
-	Failed int // ответа не было: таймаут, обрыв, отказ в соединении
+	Failed int // ответа не было вовсе: таймаут до заголовков, отказ в соединении
+
+	// Truncated — заголовки с кодом пришли, а тело оборвалось. Отдельный исход,
+	// потому что ни к одному из трёх не сводится: сервис, сбрасывающий нагрузку
+	// пятисотками и рвущий соединения, иначе неотличим от недоступного, а это
+	// состояния, требующие противоположных действий.
+	//
+	// Код такого ответа попадает в Codes — он и есть улика. Поэтому сумма
+	// по кодам больше Responses(), и шапка обязана это объяснить.
+	Truncated int
 
 	// ClientErrors — сколько из Failed приходится на исчерпание ресурсов
 	// самого генератора. Ненулевое значение обесценивает весь прогон.
@@ -64,7 +73,10 @@ type Summary struct {
 	Errors map[ErrorKind]int
 }
 
-// Responses — сколько запросов получили ответ, любой.
+// Responses — сколько запросов получили ответ целиком, любой.
+//
+// Оборванные исключены намеренно: полного ответа не было, и считать их
+// обслуженными значило бы завысить RPS ровно на долю обрывов.
 func (s Summary) Responses() int { return s.OK + s.NonOK }
 
 // schedulePeriod — сколько времени отведено расписанием на один запрос.
@@ -109,57 +121,117 @@ func (s Summary) SuccessRate() float64 {
 // проходим, и 301 означает, что запрошенного ресурса по этому адресу нет.
 func isOK(code int) bool { return code >= 200 && code < 300 }
 
-func Compute(rep runner.Report) Summary {
-	s := Summary{
-		Elapsed:    rep.Elapsed,
-		Window:     rep.Window,
-		TargetRate: rep.TargetRate,
-		Partial:    rep.Interrupted,
-		Codes:      make(map[int]int),
-		Errors:     make(map[ErrorKind]int),
+// accumulator — Summary в процессе сборки.
+//
+// Счётчики и накопители замеров живут в одном месте, потому что каждый
+// результат правит и то, и другое. Раньше половина записи была методами
+// на Summary, а половина — строчками в теле цикла, и ветки switch выглядели
+// равноправными, хотя одна делала втрое больше остальных.
+type accumulator struct {
+	sum                Summary
+	service, corrected samples
+
+	// period — сколько времени расписание отводит на один запрос, то есть
+	// порог опоздания. При 2000 RPS это 500мкс, при 10 RPS — 100мс.
+	// Абсолютная константа тут не годится: «поздно» определяется частотой,
+	// а не часами.
+	period time.Duration
+}
+
+func newAccumulator(rep runner.Report) *accumulator {
+	return &accumulator{
+		sum: Summary{
+			Elapsed:    rep.Elapsed,
+			Window:     rep.Window,
+			TargetRate: rep.TargetRate,
+			Partial:    rep.Interrupted,
+			Codes:      make(map[int]int),
+			Errors:     make(map[ErrorKind]int),
+		},
+		period: schedulePeriod(rep.TargetRate),
+	}
+}
+
+// add учитывает один результат прогона.
+func (a *accumulator) add(r runner.Result) {
+	// Прогрев считаем, но нигде больше не учитываем: отброшенное молча —
+	// способ потерять доверие к отчёту.
+	if r.Warmup {
+		a.sum.Warmup++
+		return
 	}
 
-	// Порог опоздания — один интервал расписания: при 2000 RPS это 500мкс,
-	// при 10 RPS — 100мс. Абсолютная константа тут не годится, потому что
-	// «поздно» определяется частотой, а не часами.
-	period := schedulePeriod(rep.TargetRate)
-
-	var service, corrected samples
-
-	for _, r := range rep.Results {
-		// Прогрев считаем, но нигде больше не учитываем: отброшенное молча —
-		// способ потерять доверие к отчёту.
-		if r.Warmup {
-			s.Warmup++
-			continue
-		}
-
-		s.Total++
-		s.MaxLag = max(s.MaxLag, r.Lag)
-		if period > 0 && r.Lag > period {
-			s.Late++
-		}
-
-		if r.Err != nil {
-			s.recordError(r.Err)
-			continue
-		}
-
-		s.recordResponse(r)
-		service.add(r.Duration)
-		corrected.add(r.Lag + r.Duration)
+	a.sum.Total++
+	a.sum.MaxLag = max(a.sum.MaxLag, r.Lag)
+	if a.period > 0 && r.Lag > a.period {
+		a.sum.Late++
 	}
 
-	// Перцентили — по всем полученным ответам: 503 за 2мс это настоящая работа
-	// сервера, и прятать её нельзя. А вот таймауты сюда не попадают, иначе p99
-	// схлопнется в значение -t и деградацию станет не видно.
+	// Байты считаем до ветвления: прочитанное до обрыва прочитано
+	// на самом деле, и выбрасывать его значит занижать throughput.
+	a.sum.BytesRead += r.BytesRead
+
+	switch {
+	// Код вместе с ошибкой выставляет ровно одна ветка runner.do —
+	// та, где оборвалось тело. Отдельного поля в Result не нужно.
+	case r.Err != nil && r.StatusCode != 0:
+		a.recordTruncated(r)
+	case r.Err != nil:
+		a.recordFailure(r.Err)
+	default:
+		a.recordResponse(r)
+	}
+}
+
+// recordResponse — сервер ответил целиком, и это результат независимо от кода.
+// Только такие ответы дают замеры: 503 за 2мс — настоящая работа сервера,
+// и прятать её нельзя, а вот таймауту в перцентилях места нет, иначе p99
+// схлопнется в значение -t и деградацию станет не видно.
+func (a *accumulator) recordResponse(r runner.Result) {
+	if isOK(r.StatusCode) {
+		a.sum.OK++
+	} else {
+		a.sum.NonOK++
+	}
+	a.sum.Codes[r.StatusCode]++
+
+	a.service.add(r.Duration)
+	a.corrected.add(r.Lag + r.Duration)
+}
+
+// recordFailure — ответа не было вовсе: таймаут до заголовков, отказ
+// в соединении, сброс.
+func (a *accumulator) recordFailure(err error) {
+	kind := Classify(err)
+
+	a.sum.Failed++
+	a.sum.Errors[kind]++
+	if kind.ClientSide() {
+		a.sum.ClientErrors++
+	}
+}
+
+// recordTruncated — заголовки пришли, тело оборвалось. Код записываем: ради
+// него всё и затевалось. Причина уходит в Errors наравне с таймаутами —
+// этот список отвечает на вопрос «почему не было полного ответа», и обрыв
+// такой же ответ на него. ClientErrors не трогаем: исчерпание дескрипторов
+// у генератора не может вернуть ответ с кодом.
+func (a *accumulator) recordTruncated(r runner.Result) {
+	a.sum.Truncated++
+	a.sum.Codes[r.StatusCode]++
+	a.sum.Errors[Classify(r.Err)]++
+}
+
+// summary досчитывает производные величины. Отдельно от add, потому что
+// считать их можно только когда виден весь прогон.
+func (a *accumulator) summary() Summary {
+	s := a.sum
+
 	if s.Responses() > 0 {
-		s.Latency = service.latencies()
-		s.Corrected = corrected.latencies()
-		s.Histogram = histogram(service.sorted(), histogramBuckets)
+		s.Latency = a.service.latencies()
+		s.Corrected = a.corrected.latencies()
+		s.Histogram = histogram(a.service.sorted(), histogramBuckets)
 	}
-
-	s.Trace = computeTrace(rep.Results)
 
 	// Знаменатель — окно измерения, а не весь прогон: и запросы, и байты
 	// в числителе посчитаны без прогрева.
@@ -167,29 +239,18 @@ func Compute(rep runner.Report) Summary {
 		s.RPS = float64(s.Responses()) / s.Window.Seconds()
 		s.Throughput = float64(s.BytesRead) / (1024 * 1024) / s.Window.Seconds()
 	}
-
 	return s
 }
 
-// recordError — ответа не было вовсе: таймаут, обрыв, отказ в соединении.
-func (s *Summary) recordError(err error) {
-	kind := Classify(err)
-
-	s.Failed++
-	s.Errors[kind]++
-	if kind.ClientSide() {
-		s.ClientErrors++
+func Compute(rep runner.Report) Summary {
+	acc := newAccumulator(rep)
+	for _, r := range rep.Results {
+		acc.add(r)
 	}
-}
+	s := acc.summary()
 
-// recordResponse — сервер ответил, и это результат независимо от кода.
-func (s *Summary) recordResponse(r runner.Result) {
-	if isOK(r.StatusCode) {
-		s.OK++
-	} else {
-		s.NonOK++
-	}
-
-	s.Codes[r.StatusCode]++
-	s.BytesRead += r.BytesRead
+	// Отдельный проход: фазы фильтруются по своим правилам — в них попадают
+	// и оборванные ответы, потому что DNS, TCP и TLS на них состоялись.
+	s.Trace = computeTrace(rep.Results)
+	return s
 }

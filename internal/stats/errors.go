@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"syscall"
 )
@@ -20,6 +21,11 @@ const (
 	ErrTLS       ErrorKind = "tls"
 	ErrCanceled  ErrorKind = "canceled"
 	ErrOtherKind ErrorKind = "other"
+
+	// Тело оборвалось, не дойдя до обещанной длины. Отдельно от «other»,
+	// потому что причина конкретная и действие по ней другое: ответ был,
+	// смотреть надо на код и на то, почему сервер рвёт соединения.
+	ErrTruncated ErrorKind = "truncated body"
 
 	// Ошибки, означающие, что кончились ресурсы у нас, а не у сервиса.
 	// До этой правки они попадали в «other» наравне с чем угодно, хотя
@@ -45,6 +51,11 @@ func Classify(err error) ErrorKind {
 		return ErrRefused
 	case errors.Is(err, syscall.ECONNRESET):
 		return ErrReset
+
+	// Только ErrUnexpectedEOF: голый io.EOF транспорт отдаёт, когда сервер
+	// закрыл соединение, не ответив вовсе, — это «без ответа», а не обрыв тела.
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return ErrTruncated
 
 	// EMFILE — предел процесса, ENFILE — предел системы; для отчёта это
 	// одно и то же: дескрипторы кончились.

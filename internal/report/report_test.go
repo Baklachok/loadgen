@@ -378,6 +378,24 @@ func TestTotals(t *testing.T) {
 		}
 	})
 
+	// Оборванный ответ — четвёртый исход, и без него сервис, рвущий соединения,
+	// в шапке неотличим от недоступного.
+	t.Run("обрывы показаны, только если они были", func(t *testing.T) {
+		const marker = "Оборвано:"
+
+		if strings.Contains(render(sample(), Options{Width: wide}), marker) {
+			t.Error("строка обрывов печатается, хотя обрывов не было")
+		}
+
+		s := sample()
+		s.Truncated = 7
+
+		out := render(s, Options{Width: wide})
+		if !strings.Contains(out, marker) || !strings.Contains(out, "7 (код получен, тело — нет)") {
+			t.Errorf("обрывы не показаны в шапке:\n%s", out)
+		}
+	})
+
 	t.Run("прогрев показан, только если он был", func(t *testing.T) {
 		const marker = "Прогрев:"
 
@@ -504,34 +522,32 @@ func TestRateReporting(t *testing.T) {
 
 // Самый громкий вывод, который может сделать прогон: цифры описывают
 // не сервис, а нас.
+// Самый громкий вывод, который может сделать прогон: цифры описывают не
+// сервис, а нас. Он обязан быть виден раньше самих цифр.
 func TestClientSaturationWarning(t *testing.T) {
-	// Самый громкий вывод, который может сделать прогон: цифры описывают не
-	// сервис, а нас. Он обязан быть виден раньше самих цифр.
-	t.Run("упёрлись в клиента", func(t *testing.T) {
-		t.Run("печатается при исчерпании ресурсов", func(t *testing.T) {
-			s := sample()
-			s.ClientErrors = 4213
+	t.Run("печатается при исчерпании ресурсов", func(t *testing.T) {
+		s := sample()
+		s.ClientErrors = 4213
 
-			out := render(s, Options{Width: wide})
+		out := render(s, Options{Width: wide})
 
-			if !strings.Contains(out, "Упёрлись в клиента") {
-				t.Errorf("нет предупреждения:\n%s", out)
-			}
-			if !strings.Contains(out, "4213 запросов не ушли") {
-				t.Error("не показано, сколько запросов не ушло")
-			}
-			if !strings.Contains(out, "ulimit -n") {
-				t.Error("не сказано, что с этим делать")
-			}
-			if warn, lat := strings.Index(out, "Упёрлись"), strings.Index(out, "Latency"); warn > lat {
-				t.Error("предупреждение напечатано после блока latency")
-			}
-		})
+		if !strings.Contains(out, "Упёрлись в клиента") {
+			t.Errorf("нет предупреждения:\n%s", out)
+		}
+		if !strings.Contains(out, "4213 запросов не ушли") {
+			t.Error("не показано, сколько запросов не ушло")
+		}
+		if !strings.Contains(out, "ulimit -n") {
+			t.Error("не сказано, что с этим делать")
+		}
+		if warn, lat := strings.Index(out, "Упёрлись"), strings.Index(out, "Latency"); warn > lat {
+			t.Error("предупреждение напечатано после блока latency")
+		}
+	})
 
-		t.Run("молчит, когда лимиты не при чём", func(t *testing.T) {
-			if strings.Contains(render(sample(), Options{Width: wide}), "Упёрлись в клиента") {
-				t.Error("предупреждение без единой клиентской ошибки")
-			}
-		})
+	t.Run("молчит, когда лимиты не при чём", func(t *testing.T) {
+		if strings.Contains(render(sample(), Options{Width: wide}), "Упёрлись в клиента") {
+			t.Error("предупреждение без единой клиентской ошибки")
+		}
 	})
 }
