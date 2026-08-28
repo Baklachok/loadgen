@@ -76,11 +76,14 @@ func traced() stats.Summary {
 // decodeJSON разбирает отчёт в переданную структуру. Каждый тест ниже
 // описывает только те поля, что проверяет, — а три строки на Unmarshal
 // с t.Fatal повторялись при каждом.
-func decodeJSON(t *testing.T, s stats.Summary, opt Options, into any) {
+// decodeJSON возвращает и сырой документ: проверкам формы он нужен целиком,
+// и рендерить второй раз ради этого незачем.
+func decodeJSON(t *testing.T, s stats.Summary, opt Options, into any) []byte {
 	t.Helper()
 
 	raw := renderJSON(t, s, opt)
 	if err := json.Unmarshal(raw, into); err != nil {
 		t.Fatalf("невалидный JSON: %v\n%s", err, raw)
 	}
+	return raw
 }

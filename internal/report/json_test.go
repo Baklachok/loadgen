@@ -9,51 +9,51 @@ import (
 	"github.com/Baklachok/loadgen/internal/stats"
 )
 
-func TestJSONShape(t *testing.T) {
-	var got struct {
-		Total   int `json:"total"`
-		Latency struct {
-			P99Ms float64 `json:"p99_ms"`
-		} `json:"latency"`
-		Corrected *struct {
-			P99Ms float64 `json:"p99_ms"`
-		} `json:"corrected"`
-		MaxLagMs  *float64       `json:"max_lag_ms"`
-		Codes     map[string]int `json:"codes"`
-		Errors    map[string]int `json:"errors"`
-		Histogram []struct {
-			UpperMs float64 `json:"upper_ms"`
-			Count   int     `json:"count"`
-		} `json:"histogram"`
-	}
-
-	decodeJSON(t, sample(), Options{OpenLoop: true}, &got)
-
-	if got.Total != 100 {
-		t.Errorf("total = %d, want 100", got.Total)
-	}
-	if got.Latency.P99Ms != 80 {
-		t.Errorf("latency.p99_ms = %v, want 80", got.Latency.P99Ms)
-	}
-	if got.Corrected == nil || got.Corrected.P99Ms != 110 {
-		t.Errorf("corrected = %+v, want p99_ms=110", got.Corrected)
-	}
-	if got.MaxLagMs == nil || *got.MaxLagMs != 30 {
-		t.Errorf("max_lag_ms = %v, want 30", got.MaxLagMs)
-	}
-	if got.Codes["200"] != 90 || got.Codes["503"] != 3 {
-		t.Errorf("codes = %v", got.Codes)
-	}
-	if got.Errors["timeout"] != 2 {
-		t.Errorf("errors = %v", got.Errors)
-	}
-	if len(got.Histogram) != 3 || got.Histogram[0].Count != 80 {
-		t.Errorf("histogram = %+v", got.Histogram)
-	}
-}
-
 // Поля документа: каждое несёт то, что обещает его имя.
 func TestJSONFields(t *testing.T) {
+	t.Run("ядро документа", func(t *testing.T) {
+		var got struct {
+			Total   int `json:"total"`
+			Latency struct {
+				P99Ms float64 `json:"p99_ms"`
+			} `json:"latency"`
+			Corrected *struct {
+				P99Ms float64 `json:"p99_ms"`
+			} `json:"corrected"`
+			MaxLagMs  *float64       `json:"max_lag_ms"`
+			Codes     map[string]int `json:"codes"`
+			Errors    map[string]int `json:"errors"`
+			Histogram []struct {
+				UpperMs float64 `json:"upper_ms"`
+				Count   int     `json:"count"`
+			} `json:"histogram"`
+		}
+
+		decodeJSON(t, sample(), Options{OpenLoop: true}, &got)
+
+		if got.Total != 100 {
+			t.Errorf("total = %d, want 100", got.Total)
+		}
+		if got.Latency.P99Ms != 80 {
+			t.Errorf("latency.p99_ms = %v, want 80", got.Latency.P99Ms)
+		}
+		if got.Corrected == nil || got.Corrected.P99Ms != 110 {
+			t.Errorf("corrected = %+v, want p99_ms=110", got.Corrected)
+		}
+		if got.MaxLagMs == nil || *got.MaxLagMs != 30 {
+			t.Errorf("max_lag_ms = %v, want 30", got.MaxLagMs)
+		}
+		if got.Codes["200"] != 90 || got.Codes["503"] != 3 {
+			t.Errorf("codes = %v", got.Codes)
+		}
+		if got.Errors["timeout"] != 2 {
+			t.Errorf("errors = %v", got.Errors)
+		}
+		if len(got.Histogram) != 3 || got.Histogram[0].Count != 80 {
+			t.Errorf("histogram = %+v", got.Histogram)
+		}
+	})
+
 	// Заголовок отчёта не должен читаться как успех, когда сервис отдавал
 	// одни отказы: ровно эта строка раньше и врала.
 	t.Run("исходы по отдельности", func(t *testing.T) {
@@ -279,4 +279,25 @@ func TestJSONAbsence(t *testing.T) {
 			t.Error("histogram должен быть [], а не null — потребителю проще итерироваться")
 		}
 	})
+}
+
+// Версия схемы — первое, что должен прочитать чужой парсер, и единственное,
+// на что он может опереться, решая, понимает ли он документ.
+func TestJSONSchemaVersion(t *testing.T) {
+	var got struct {
+		Schema int `json:"schema"`
+	}
+	raw := decodeJSON(t, sample(), Options{}, &got)
+
+	if got.Schema != schemaVersion {
+		t.Errorf("schema = %d, ожидалось %d", got.Schema, schemaVersion)
+	}
+	if schemaVersion < 1 {
+		t.Errorf("schemaVersion = %d: версия начинается с единицы", schemaVersion)
+	}
+
+	// Первым полем — чтобы версию было видно, не разбирая документ целиком
+	if idx := strings.Index(string(raw), `"schema"`); idx < 0 || idx > 20 {
+		t.Errorf("schema не в начале документа (позиция %d):\n%s", idx, raw[:60])
+	}
 }

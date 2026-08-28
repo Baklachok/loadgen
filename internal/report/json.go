@@ -10,9 +10,22 @@ import (
 	"github.com/Baklachok/loadgen/internal/stats"
 )
 
-// Отдельные DTO, а не теги на stats.Summary: time.Duration сериализуется в
-// наносекунды-числом, что нечитаемо, и формат отчёта не должен ломаться
-// каждый раз, когда внутри stats переименовали поле.
+// Документ описан отдельными DTO, а не тегами на stats.Summary: time.Duration
+// сериализуется наносекундами-числом, что нечитаемо, а форма контракта не
+// должна меняться каждый раз, когда внутри stats переименовали поле.
+
+// schemaVersion — версия контракта JSON-вывода.
+//
+// Бампается, когда поле убрано, переименовано, сменило тип или смысл —
+// то есть когда чужой парсер сломается. Добавление поля версию не меняет:
+// потребитель, читающий известные ему ключи, переживает это молча.
+//
+// Форма документа зафиксирована здесь осознанно. Хендофф предлагал сгруппировать
+// счётчики под `summary`, но верхнеуровневые headline-числа дают `jq .rps`
+// вместо `jq .summary.rps`, и примеры в README уже такие. Менять форму ради
+// симметрии в момент её заморозки — худший из моментов.
+const schemaVersion = 1
+
 // Перцентили — указатели: на недостаточной выборке они уезжают в null.
 // Число здесь было бы такой же ложью, как в текстовом отчёте, только
 // потребитель у него автоматический и переспросить не может.
@@ -73,6 +86,7 @@ type jsonConfig struct {
 }
 
 type jsonSummary struct {
+	Schema int        `json:"schema"`
 	Config jsonConfig `json:"config"`
 
 	Total         int     `json:"total"`
@@ -161,6 +175,7 @@ func writeJSON(w io.Writer, s stats.Summary, opt Options) error {
 
 func summaryJSON(s stats.Summary, opt Options) jsonSummary {
 	out := jsonSummary{
+		Schema:        schemaVersion,
 		Config:        runConfig(opt.Run),
 		Total:         s.Total,
 		Warmup:        s.Warmup,
