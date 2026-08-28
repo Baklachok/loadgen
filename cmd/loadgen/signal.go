@@ -15,7 +15,9 @@ import (
 // Свой канал вместо signal.NotifyContext: его stop() отменяет контекст, и
 // наблюдатель просыпался при обычном завершении — сообщение об остановке
 // печаталось на каждом успешном прогоне.
-func interruptible(stderr io.Writer) (context.Context, func()) {
+// exit передаётся параметром, а не берётся как os.Exit: второй сигнал
+// обязан обрывать процесс, и проверить это можно только подменив выход.
+func interruptible(stderr io.Writer, exit func(int)) (context.Context, func()) {
 	// Буфер на два: пока печатаем и отменяем, второй Ctrl+C не должен потеряться.
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -31,7 +33,7 @@ func interruptible(stderr io.Writer) (context.Context, func()) {
 		// уходит в kill -9, теряя все собранные результаты.
 		<-signals
 		fmt.Fprintln(stderr, "прервано")
-		os.Exit(exitInterrupt)
+		exit(exitInterrupt)
 	}()
 
 	return ctx, func() {

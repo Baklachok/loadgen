@@ -71,7 +71,7 @@ func run(args []string, stdout, stderr *os.File) int {
 		Run:      report.RunInfo{Version: buildVersion(), Config: cfg},
 	}
 
-	ctx, stop := interruptible(stderr)
+	ctx, stop := interruptible(stderr, os.Exit)
 	defer stop()
 
 	// Печатать ли шапку, решает сам рендерер: в машинных форматах её нет.
