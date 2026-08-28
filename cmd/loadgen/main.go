@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -63,136 +65,233 @@ func versionFrom(info *debug.BuildInfo) string {
 	return "dev"
 }
 
+// Контракт кодов выхода. Без него loadgen нельзя поставить в пайплайн:
+// он всегда «успешен», даже когда сто процентов запросов упали.
+//
+// Отступление от stdlib осознанное. flag.ExitOnError выходит с кодом 2 на
+// любой ошибке разбора, но здесь 2 занят под «измерить не удалось» — это
+// разные вещи, и CI должен краснеть по-разному. Поэтому флаги разбираются
+// с ContinueOnError, а подсказка печатается вручную.
+const (
+	exitOK        = 0   // прогон состоялся; SLO, если заданы, выдержаны
+	exitUsage     = 1   // флаги, URL, несовместимые опции
+	exitNoRun     = 2   // измерить не удалось: ни одного ответа
+	exitSLO       = 3   // SLO нарушен; появится вместе с --slo-*
+	exitInterrupt = 130 // прервано пользователем, результат частичный
+)
+
 func main() {
-	var (
-		n           = flag.Int("n", 200, "количество запросов")
-		c           = flag.Int("c", 50, "конкурентность; в open-loop — потолок запросов в полёте")
-		z           = flag.Duration("z", 0, "длительность прогона (взаимоисключающе с -n)")
-		method      = flag.String("m", "GET", "HTTP-метод")
-		bodyStr     = flag.String("d", "", "тело запроса")
-		timeout     = flag.Duration("t", 10*time.Second, "таймаут запроса")
-		rateLimit   = flag.Float64("rate", 0, "постоянный RPS, режим open-loop (0 — closed-loop)")
-		output      = flag.String("o", "text", "формат вывода: text или json")
-		trace       = flag.Bool("trace", false, "разбить latency по фазам: DNS, TCP, TLS, TTFB")
-		insecure    = flag.Bool("insecure", false, "не проверять TLS-сертификат")
-		noKeepAlive = flag.Bool("disable-keepalive", false, "новое соединение на каждый запрос")
-		http2       = flag.Bool("http2", false, "разрешить HTTP/2")
-		showVersion = flag.Bool("version", false, "показать версию")
-	)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
 
-	var headers headerFlag
-	flag.Var(&headers, "H", "заголовок в формате 'Key: Value' (можно несколько раз)")
+// flags — объявленные флаги одним типом: иначе run таскает полтора десятка
+// указателей через все свои шаги.
+type flags struct {
+	n, c        *int
+	z, timeout  *time.Duration
+	method      *string
+	body        *string
+	output      *string
+	rate        *float64
+	trace       *bool
+	insecure    *bool
+	noKeepAlive *bool
+	http2       *bool
+	showVersion *bool
 
-	var warmup warmupFlag
-	flag.Var(&warmup, "warmup", "прогрев: длительность (5s) или число запросов (100), в статистику не идёт")
+	headers headerFlag
+	warmup  warmupFlag
+}
 
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "loadgen — нагрузочный тестер HTTP\n\n")
-		fmt.Fprintf(os.Stderr, "Использование:\n  loadgen [флаги] URL\n\nФлаги:\n")
-		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nПримеры:\n")
-		fmt.Fprintf(os.Stderr, "  loadgen -n 1000 -c 50 http://localhost:8080\n")
-		fmt.Fprintf(os.Stderr, "  loadgen -z 30s -rate 500 -c 200 http://localhost:8080   # open-loop\n")
-		fmt.Fprintf(os.Stderr, "  loadgen -n 1000 -o json http://localhost:8080 | jq .latency.p99_ms\n")
-		fmt.Fprintf(os.Stderr, "  loadgen -m POST -d '{\"a\":1}' -H 'Content-Type: application/json' http://localhost:8080/api\n")
+func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
+	f := &flags{
+		n:           fs.Int("n", 200, "количество запросов"),
+		c:           fs.Int("c", 50, "конкурентность; в open-loop — потолок запросов в полёте"),
+		z:           fs.Duration("z", 0, "длительность прогона (взаимоисключающе с -n)"),
+		method:      fs.String("m", "GET", "HTTP-метод"),
+		body:        fs.String("d", "", "тело запроса"),
+		timeout:     fs.Duration("t", 10*time.Second, "таймаут запроса"),
+		rate:        fs.Float64("rate", 0, "постоянный RPS, режим open-loop (0 — closed-loop)"),
+		output:      fs.String("o", "text", "формат вывода: text или json"),
+		trace:       fs.Bool("trace", false, "разбить latency по фазам: DNS, TCP, TLS, TTFB"),
+		insecure:    fs.Bool("insecure", false, "не проверять TLS-сертификат"),
+		noKeepAlive: fs.Bool("disable-keepalive", false, "новое соединение на каждый запрос"),
+		http2:       fs.Bool("http2", false, "разрешить HTTP/2"),
+		showVersion: fs.Bool("version", false, "показать версию"),
+	}
+	fs.Var(&f.headers, "H", "заголовок в формате 'Key: Value' (можно несколько раз)")
+	fs.Var(&f.warmup, "warmup", "прогрев: длительность (5s) или число запросов (100), в статистику не идёт")
+
+	fs.Usage = func() {
+		fmt.Fprintf(stderr, "loadgen — нагрузочный тестер HTTP\n\n")
+		fmt.Fprintf(stderr, "Использование:\n  loadgen [флаги] URL\n\nФлаги:\n")
+		fs.PrintDefaults()
+
+		fmt.Fprintf(stderr, "\nПримеры:\n")
+		for _, ex := range []string{
+			"loadgen -n 1000 -c 50 http://localhost:8080",
+			"loadgen -z 30s -rate 500 -c 200 http://localhost:8080   # open-loop",
+			"loadgen -n 1000 -o json http://localhost:8080 | jq .latency.p99_ms",
+			`loadgen -m POST -d '{"a":1}' -H 'Content-Type: application/json' http://localhost:8080/api`,
+		} {
+			fmt.Fprintf(stderr, "  %s\n", ex)
+		}
+	}
+	return f
+}
+
+// config собирает конфиг прогона и ловит противоречие, которого Validate
+// увидеть не может: он смотрит на значения, а не на то, задавал ли их человек.
+func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
+	// Заданы ли флаги явно, знает только FlagSet: сравнение с умолчанием
+	// не годится — «-n 200 -z 5s» тоже противоречие, хотя 200 это дефолт.
+	var setN, setZ bool
+	fs.Visit(func(fl *flag.Flag) {
+		switch fl.Name {
+		case "n":
+			setN = true
+		case "z":
+			setZ = true
+		}
+	})
+	if setN && setZ {
+		return runner.Config{}, errors.New("-n и -z взаимоисключающи")
 	}
 
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println("loadgen", buildVersion())
-		return
-	}
-
-	if flag.NArg() != 1 {
-		flag.Usage()
-		os.Exit(2)
-	}
-
-	renderer, err := report.NewRenderer(*output)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "ошибка:", err)
-		os.Exit(2)
-	}
-
-	// -n сбрасываем в 0, если задан -z, иначе Validate решит, что заданы оба
-	requests := *n
-	if *z > 0 {
+	// -n обнуляется при -z, иначе Validate решит, что заданы оба.
+	requests := *f.n
+	if *f.z > 0 {
 		requests = 0
 	}
 
 	cfg := runner.Config{
-		URL:              flag.Arg(0),
-		Method:           *method,
-		Body:             []byte(*bodyStr),
-		Headers:          headers.h,
+		URL:              fs.Arg(0),
+		Method:           *f.method,
+		Body:             []byte(*f.body),
+		Headers:          f.headers.h,
 		Requests:         requests,
-		Duration:         *z,
-		Concurrency:      *c,
-		Timeout:          *timeout,
-		Rate:             *rateLimit,
-		Trace:            *trace,
-		WarmupRequests:   warmup.requests,
-		WarmupDuration:   warmup.duration,
-		DisableKeepAlive: *noKeepAlive,
-		Insecure:         *insecure,
-		HTTP2:            *http2,
+		Duration:         *f.z,
+		Concurrency:      *f.c,
+		Timeout:          *f.timeout,
+		Rate:             *f.rate,
+		Trace:            *f.trace,
+		WarmupRequests:   f.warmup.requests,
+		WarmupDuration:   f.warmup.duration,
+		DisableKeepAlive: *f.noKeepAlive,
+		Insecure:         *f.insecure,
+		HTTP2:            *f.http2,
+	}
+	return cfg, cfg.Validate()
+}
+
+// run принимает аргументы и потоки, а не читает глобальные: только так
+// контракт кодов выхода можно проверить тестом, а не руками.
+func run(args []string, stdout, stderr *os.File) int {
+	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	f := newFlags(fs, stderr)
+
+	// ContinueOnError уже напечатал причину и подсказку; нам остаётся код.
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if *f.showVersion {
+		fmt.Fprintln(stdout, "loadgen", buildVersion())
+		return exitOK
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return exitUsage
 	}
 
-	if err := cfg.Validate(); err != nil {
-		fmt.Fprintln(os.Stderr, "ошибка:", err)
-		os.Exit(2)
+	renderer, err := report.NewRenderer(*f.output)
+	if err != nil {
+		fmt.Fprintln(stderr, "ошибка:", err)
+		return exitUsage
+	}
+
+	cfg, err := f.config(fs)
+	if err != nil {
+		fmt.Fprintln(stderr, "ошибка:", err)
+		return exitUsage
 	}
 
 	opt := report.Options{
-		Color:    report.ColorEnabled(os.Stdout),
-		Width:    report.TerminalWidth(os.Stdout, 80),
+		Color:    report.ColorEnabled(stdout),
+		Width:    report.TerminalWidth(stdout, 80),
 		OpenLoop: cfg.Rate > 0,
 		Run:      report.RunInfo{Version: buildVersion(), Config: cfg},
 	}
 
-	// Свой канал вместо signal.NotifyContext: его stop() отменяет контекст,
-	// и наблюдатель просыпался при обычном завершении — сообщение об остановке
-	// печаталось на каждом успешном прогоне.
-	//
-	// Буфер на два: пока печатаем и отменяем, второй Ctrl+C не должен потеряться.
-	signals := make(chan os.Signal, 2)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(signals)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		<-signals
-		fmt.Fprintln(os.Stderr, "\nостановка, собираю результаты… (ещё раз Ctrl+C — выйти немедленно)")
-		cancel()
-
-		// Без этого зависший запрос делает Ctrl+C бесполезным, и пользователь
-		// уходит в kill -9, теряя все собранные результаты.
-		<-signals
-		fmt.Fprintln(os.Stderr, "прервано")
-		os.Exit(130)
-	}()
+	ctx, stop := interruptible(stderr)
+	defer stop()
 
 	// Печатать ли шапку, решает сам рендерер: в машинных форматах её нет.
-	if err := renderer.Header(os.Stdout, opt); err != nil {
-		fmt.Fprintln(os.Stderr, "ошибка вывода:", err)
-		os.Exit(1)
+	if err := renderer.Header(stdout, opt); err != nil {
+		fmt.Fprintln(stderr, "ошибка вывода:", err)
+		return exitNoRun
 	}
 
 	// Время меряет сам runner: он один знает, когда кончился прогрев.
 	rep, err := runner.Run(ctx, cfg)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "ошибка:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "ошибка:", err)
+		return exitUsage
 	}
 
 	// Протокол и время старта известны только после прогона.
 	opt.Run.Proto, opt.Run.StartedAt = rep.Proto, rep.StartedAt
 
-	if err := renderer.Render(os.Stdout, stats.Compute(rep), opt); err != nil {
-		fmt.Fprintln(os.Stderr, "ошибка вывода:", err)
-		os.Exit(1)
+	summary := stats.Compute(rep)
+	if err := renderer.Render(stdout, summary, opt); err != nil {
+		fmt.Fprintln(stderr, "ошибка вывода:", err)
+		return exitNoRun
 	}
+
+	return outcome(ctx, summary)
+}
+
+// interruptible возвращает контекст, отменяемый по Ctrl+C.
+//
+// Свой канал вместо signal.NotifyContext: его stop() отменяет контекст, и
+// наблюдатель просыпался при обычном завершении — сообщение об остановке
+// печаталось на каждом успешном прогоне.
+func interruptible(stderr io.Writer) (context.Context, func()) {
+	// Буфер на два: пока печатаем и отменяем, второй Ctrl+C не должен потеряться.
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		<-signals
+		fmt.Fprintln(stderr, "\nостановка, собираю результаты… (ещё раз Ctrl+C — выйти немедленно)")
+		cancel()
+
+		// Без этого зависший запрос делает Ctrl+C бесполезным, и пользователь
+		// уходит в kill -9, теряя все собранные результаты.
+		<-signals
+		fmt.Fprintln(stderr, "прервано")
+		os.Exit(exitInterrupt)
+	}()
+
+	return ctx, func() {
+		signal.Stop(signals)
+		cancel()
+	}
+}
+
+// outcome переводит итог прогона в код возврата.
+//
+// «Сервер вернул 500» кодом не является: инструмент отработал, он для того
+// и нужен, чтобы показать пятисотки. Код 2 означает другое — измерить не
+// удалось вовсе, ни одного ответа не пришло.
+func outcome(ctx context.Context, s stats.Summary) int {
+	if ctx.Err() != nil {
+		return exitInterrupt
+	}
+	if s.Responses() == 0 {
+		return exitNoRun
+	}
+	return exitOK
 }
