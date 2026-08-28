@@ -18,12 +18,19 @@ type Result struct {
 	Warmup     bool   // запрос из прогрева: в статистику не идёт
 }
 
+// Sink получает результаты по мере готовности. Прогон их не хранит: на
+// -z 300s это сотни мегабайт ради данных, которые статистике нужны
+// по восемь байт на запрос.
+//
+// Вызывается последовательно, из одной горутины, — накопителю на той стороне
+// блокировки не нужны. Прогревочные результаты приходят наравне с прочими:
+// решать их судьбу — дело статистики, а не прогона.
+type Sink func(Result)
+
 // Report — что дал прогон. Окно измерения отдаётся вместе с замерами
 // намеренно: делить измеренные запросы на полную длительность прогона —
 // значит занижать RPS ровно на долю прогрева.
 type Report struct {
-	Results []Result
-
 	Elapsed time.Duration // весь прогон, от старта до последнего результата
 	Window  time.Duration // от старта первого измеряемого запроса до конца
 
@@ -44,7 +51,7 @@ type Report struct {
 	Interrupted bool
 }
 
-func Run(ctx context.Context, cfg Config) (Report, error) {
+func Run(ctx context.Context, cfg Config, sink Sink) (Report, error) {
 	if err := cfg.Validate(); err != nil {
 		return Report{}, fmt.Errorf("некорректная конфигурация: %w", err)
 	}
@@ -68,10 +75,12 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		e.loop(ctx, runCtx)
 	}()
 
-	all := collect(results, cfg.Requests)
+	for r := range results {
+		sink(r)
+	}
 
 	// Дедлайн -z живёт в runCtx; отменённым ctx бывает только по сигналу.
-	return e.report(all, time.Now(), ctx.Err() != nil), nil
+	return e.report(time.Now(), ctx.Err() != nil), nil
 }
 
 // deadline даёт контекст, гасящий выдачу новых задач по -z. Родительский ctx
@@ -82,18 +91,4 @@ func deadline(ctx context.Context, cfg Config) (context.Context, context.CancelF
 		return context.WithTimeout(ctx, cfg.Duration)
 	}
 	return context.WithCancel(ctx)
-}
-
-// collect преаллоцирует слайс под ожидаемое число запросов. В режиме -z оно
-// заранее неизвестно — берём разумный старт, дальше слайс растёт сам.
-func collect(results <-chan Result, expected int) []Result {
-	if expected <= 0 {
-		expected = 1024
-	}
-
-	all := make([]Result, 0, expected)
-	for r := range results {
-		all = append(all, r)
-	}
-	return all
 }

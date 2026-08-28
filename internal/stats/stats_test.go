@@ -320,8 +320,7 @@ func TestComputeRates(t *testing.T) {
 		results := append([]runner.Result{warm, warm}, repeat(100, resp(200, ms(5)))...)
 
 		// Прогон длился 2с, из них измерялись последние 0.5с
-		s := Compute(runner.Report{
-			Results: results,
+		s := computeReport(results, runner.Report{
 			Elapsed: 2 * time.Second,
 			Window:  500 * time.Millisecond,
 		})
@@ -338,7 +337,7 @@ func TestComputeRates(t *testing.T) {
 		warm := resp(200, ms(5))
 		warm.Warmup = true
 
-		s := Compute(runner.Report{Results: []runner.Result{warm}, Elapsed: time.Second})
+		s := computeReport([]runner.Result{warm}, runner.Report{Elapsed: time.Second})
 
 		if s.RPS != 0 {
 			t.Errorf("RPS = %v при пустом окне, ожидался 0", s.RPS)
@@ -347,8 +346,7 @@ func TestComputeRates(t *testing.T) {
 
 	// Заданная частота должна доезжать до отчёта, иначе сопоставлять не с чем.
 	t.Run("заданная частота доезжает до отчёта", func(t *testing.T) {
-		s := Compute(runner.Report{
-			Results:    []runner.Result{resp(200, ms(1))},
+		s := computeReport([]runner.Result{resp(200, ms(1))}, runner.Report{
 			Elapsed:    time.Second,
 			Window:     time.Second,
 			TargetRate: 500,
@@ -356,51 +354,6 @@ func TestComputeRates(t *testing.T) {
 
 		if s.TargetRate != 500 {
 			t.Errorf("TargetRate = %v, ожидалось 500", s.TargetRate)
-		}
-	})
-
-	// Порог опоздания — интервал расписания, а не абсолютная константа:
-	// при 1000 RPS «поздно» это 1мс, при 10 RPS — 100мс.
-	t.Run("опоздания считаются по интервалу расписания", func(t *testing.T) {
-		onTime := resp(200, ms(5))
-		onTime.Lag = 300 * time.Microsecond // джиттер планировщика
-
-		late := resp(200, ms(5))
-		late.Lag = 8 * time.Millisecond
-
-		s := Compute(runner.Report{
-			Results:    []runner.Result{onTime, onTime, late, late, late},
-			Elapsed:    time.Second,
-			Window:     time.Second,
-			TargetRate: 1000, // интервал 1мс
-		})
-
-		if s.Late != 3 {
-			t.Errorf("Late = %d, ожидалось 3: опоздавшими считаются те, кто вышел позже слота", s.Late)
-		}
-		if s.LateShare() != 0.6 {
-			t.Errorf("LateShare = %v, ожидалось 0.6", s.LateShare())
-		}
-		if s.MaxLag != 8*time.Millisecond {
-			t.Errorf("MaxLag = %v, ожидалось 8ms", s.MaxLag)
-		}
-	})
-
-	t.Run("в closed-loop опозданий не бывает", func(t *testing.T) {
-		late := resp(200, ms(5))
-		late.Lag = time.Second // мусор в поле, расписания не было
-
-		s := Compute(runner.Report{
-			Results: []runner.Result{late},
-			Elapsed: time.Second,
-			Window:  time.Second,
-		})
-
-		if s.Late != 0 {
-			t.Errorf("Late = %d без заданной частоты", s.Late)
-		}
-		if s.LateShare() != 0 {
-			t.Errorf("LateShare = %v без заданной частоты", s.LateShare())
 		}
 	})
 
@@ -427,6 +380,87 @@ func TestComputeRates(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+// Расписание: кто ушёл позже слота и во что это обошлось клиенту. Отдельно
+// от частоты — предмет другой. RPS отвечает на «сколько прошло», расписание
+// на «когда именно и с каким опозданием»; под одним именем они разъезжались.
+func TestComputeSchedule(t *testing.T) {
+	// Порог опоздания — интервал расписания, а не абсолютная константа:
+	// при 1000 RPS «поздно» это 1мс, при 10 RPS — 100мс.
+	t.Run("опоздания считаются по интервалу расписания", func(t *testing.T) {
+		onTime := resp(200, ms(5))
+		onTime.Lag = 300 * time.Microsecond // джиттер планировщика
+
+		late := resp(200, ms(5))
+		late.Lag = 8 * time.Millisecond
+
+		s := computeReport([]runner.Result{onTime, onTime, late, late, late}, runner.Report{
+			Elapsed:    time.Second,
+			Window:     time.Second,
+			TargetRate: 1000, // интервал 1мс
+		})
+
+		if s.Late != 3 {
+			t.Errorf("Late = %d, ожидалось 3: опоздавшими считаются те, кто вышел позже слота", s.Late)
+		}
+		if s.LateShare() != 0.6 {
+			t.Errorf("LateShare = %v, ожидалось 0.6", s.LateShare())
+		}
+		if s.MaxLag != 8*time.Millisecond {
+			t.Errorf("MaxLag = %v, ожидалось 8ms", s.MaxLag)
+		}
+	})
+
+	t.Run("в closed-loop опозданий не бывает", func(t *testing.T) {
+		late := resp(200, ms(5))
+		late.Lag = time.Second // мусор в поле, расписания не было
+
+		s := computeReport([]runner.Result{late}, runner.Report{
+			Elapsed: time.Second,
+			Window:  time.Second,
+		})
+
+		if s.Late != 0 {
+			t.Errorf("Late = %d без заданной частоты", s.Late)
+		}
+		if s.LateShare() != 0 {
+			t.Errorf("LateShare = %v без заданной частоты", s.LateShare())
+		}
+	})
+
+	// На этом держится отказ от второго накопителя: в closed-loop поправленные
+	// замеры до единого совпадают с исходными, и копить их отдельно — лишний
+	// слайс на миллионы значений и лишняя сортировка.
+	t.Run("поправка на расписание", func(t *testing.T) {
+		t.Run("в closed-loop совпадает с замерами", func(t *testing.T) {
+			// Lag в поле есть, но расписания не было: поправлять не на что
+			r := resp(200, ms(10))
+			r.Lag = time.Second
+
+			s := compute(repeat(20, r), time.Second)
+
+			if s.Corrected != s.Latency {
+				t.Errorf("Corrected=%+v, Latency=%+v: без расписания они обязаны совпасть", s.Corrected, s.Latency)
+			}
+		})
+
+		t.Run("в open-loop прибавляет опоздание", func(t *testing.T) {
+			r := resp(200, ms(10))
+			r.Lag = ms(40)
+
+			s := computeReport(repeat(20, r), runner.Report{
+				Elapsed: time.Second, Window: time.Second, TargetRate: 100,
+			})
+
+			if s.Latency.P50 != ms(10) {
+				t.Errorf("Latency.p50 = %v, ожидалось 10ms: в замер запроса опоздание не входит", s.Latency.P50)
+			}
+			if s.Corrected.P50 != ms(50) {
+				t.Errorf("Corrected.p50 = %v, ожидалось 50ms: это то, что почувствовал бы клиент по часам", s.Corrected.P50)
+			}
+		})
 	})
 }
 

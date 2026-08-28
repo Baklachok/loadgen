@@ -80,8 +80,12 @@ func run(args []string, stdout, stderr *os.File) int {
 		return exitNoRun
 	}
 
+	// Накопитель заводится до прогона: результаты в нём и оседают, а сам
+	// прогон их не хранит — на длинном -z это сотни мегабайт.
+	acc := stats.NewAccumulator(cfg.Rate)
+
 	// Время меряет сам runner: он один знает, когда кончился прогрев.
-	rep, err := runner.Run(ctx, cfg)
+	rep, err := runner.Run(ctx, cfg, acc.Add)
 	if err != nil {
 		fmt.Fprintln(stderr, "ошибка:", err)
 		return exitUsage
@@ -90,7 +94,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	// Протокол и время старта известны только после прогона.
 	opt.Run.Proto, opt.Run.StartedAt = rep.Proto, rep.StartedAt
 
-	summary := stats.Compute(rep)
+	summary := acc.Summary(rep)
 	if err := renderer.Render(stdout, summary, opt); err != nil {
 		fmt.Fprintln(stderr, "ошибка вывода:", err)
 		return exitNoRun

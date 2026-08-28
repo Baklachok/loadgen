@@ -75,7 +75,7 @@ func TestInvalidMethodFailsBeforeAnyRequest(t *testing.T) {
 	cfg := requestsConfig(srv, 5000)
 	cfg.Method = "PO ST"
 
-	if _, err := Run(context.Background(), cfg); err == nil {
+	if _, err := Run(context.Background(), cfg, discard); err == nil {
 		t.Fatal("ожидалась ошибка на некорректном методе")
 	}
 	if n := len(rec.captured()); n != 0 {

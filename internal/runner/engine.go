@@ -48,9 +48,8 @@ func newEngine(cfg Config, factory *requestFactory, tr *http.Transport, out chan
 // report собирает итог прогона. Живёт на engine, а не в Run, потому что
 // половину полей знает только он: когда начали, когда начали мерить
 // и о чём в итоге договорились с сервером.
-func (e *engine) report(all []Result, end time.Time, interrupted bool) Report {
+func (e *engine) report(end time.Time, interrupted bool) Report {
 	return Report{
-		Results:     all,
 		Elapsed:     end.Sub(e.runStart),
 		Window:      e.measuredWindow(end),
 		TargetRate:  e.cfg.Rate,

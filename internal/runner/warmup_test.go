@@ -108,7 +108,7 @@ func TestWarmupValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := Run(context.Background(), tt.cfg()); err == nil {
+			if _, err := Run(context.Background(), tt.cfg(), discard); err == nil {
 				t.Error("ожидалась ошибка конфигурации")
 			}
 		})

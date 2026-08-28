@@ -99,20 +99,32 @@ func durationConfig(srv *httptest.Server, d time.Duration) Config {
 // прогона, а разбор конфига проверяется отдельно.
 func mustRun(t *testing.T, ctx context.Context, cfg Config) []Result {
 	t.Helper()
-	return mustRunReport(t, ctx, cfg).Results
+
+	var out []Result
+	mustRunSink(t, ctx, cfg, func(r Result) { out = append(out, r) })
+	return out
 }
 
 // mustRunReport нужен тестам, которым важны не только замеры, но и окно,
 // за которое они собраны.
 func mustRunReport(t *testing.T, ctx context.Context, cfg Config) Report {
 	t.Helper()
+	return mustRunSink(t, ctx, cfg, discard)
+}
 
-	rep, err := Run(ctx, cfg)
+func mustRunSink(t *testing.T, ctx context.Context, cfg Config, sink Sink) Report {
+	t.Helper()
+
+	rep, err := Run(ctx, cfg, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return rep
 }
+
+// discard — sink для тестов, которым результаты не нужны. Прогон их больше
+// нигде не копит, поэтому «никуда» приходится называть явно.
+func discard(Result) {}
 
 // assertNoErrors — ни один запрос не должен был провалиться.
 func assertNoErrors(t *testing.T, res []Result) {

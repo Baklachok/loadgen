@@ -39,7 +39,17 @@ func tenMs() []time.Duration {
 // compute избавляет тесты от сборки runner.Report руками там, где окно
 // измерения совпадает с длительностью прогона, — то есть везде без прогрева.
 func compute(results []runner.Result, elapsed time.Duration) Summary {
-	return Compute(runner.Report{Results: results, Elapsed: elapsed, Window: elapsed})
+	return computeReport(results, runner.Report{Elapsed: elapsed, Window: elapsed})
+}
+
+// computeReport прогоняет результаты через накопитель. Прогон их больше
+// не хранит, поэтому кормить его приходится по одному — как в бою.
+func computeReport(results []runner.Result, rep runner.Report) Summary {
+	acc := NewAccumulator(rep.TargetRate)
+	for _, r := range results {
+		acc.Add(r)
+	}
+	return acc.Summary(rep)
 }
 
 // repeat — «сделать N одинаковых замеров». Встречалось дважды и двумя

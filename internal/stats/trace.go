@@ -44,37 +44,46 @@ func (a *phaseAcc) stats() PhaseStats {
 	return a.latencies()
 }
 
-// computeTrace возвращает nil, если трассировка была выключена: отчёту нужно
-// отличать «фаз не было» от «не измеряли».
-func computeTrace(results []runner.Result) *TraceSummary {
-	var dns, connect, handshake, ttfb phaseAcc
-	summary := &TraceSummary{}
+// traceAcc копит фазы соединения по всем запросам. Отдельный тип, а не шесть
+// полей в Accumulator: у них одна общая задача, и методы, которые их читают,
+// живут здесь же.
+type traceAcc struct {
+	dns, connect, handshake, ttfb phaseAcc
+	traced, reused                int
+}
 
-	for _, r := range results {
-		// Прогрев исключается и здесь: именно он делает рукопожатия, и оставить
-		// их в фазах значило бы отчитаться о том, что шапка назвала отброшенным.
-		if r.Trace == nil || r.Warmup {
-			continue
-		}
-
-		summary.Traced++
-		if r.Trace.Reused {
-			summary.Reused++
-		}
-
-		dns.add(r.Trace.DNS)
-		connect.add(r.Trace.Connect)
-		handshake.add(r.Trace.TLS)
-		ttfb.add(r.Trace.TTFB)
+// add учитывает фазы одного запроса. Оборванные ответы сюда входят наравне
+// с целыми: DNS, TCP и TLS на них состоялись. Терпит nil — так вызывающему
+// не нужна ветка на «трассировка выключена».
+func (a *traceAcc) add(t *runner.Trace) {
+	if t == nil {
+		return
 	}
 
-	if summary.Traced == 0 {
+	a.traced++
+	if t.Reused {
+		a.reused++
+	}
+
+	a.dns.add(t.DNS)
+	a.connect.add(t.Connect)
+	a.handshake.add(t.TLS)
+	a.ttfb.add(t.TTFB)
+}
+
+// summary возвращает nil, если трассировка была выключена: отчёту нужно
+// отличать «фаз не было» от «не измеряли».
+func (a *traceAcc) summary() *TraceSummary {
+	if a.traced == 0 {
 		return nil
 	}
 
-	summary.DNS = dns.stats()
-	summary.Connect = connect.stats()
-	summary.TLS = handshake.stats()
-	summary.TTFB = ttfb.stats()
-	return summary
+	return &TraceSummary{
+		Traced:  a.traced,
+		Reused:  a.reused,
+		DNS:     a.dns.stats(),
+		Connect: a.connect.stats(),
+		TLS:     a.handshake.stats(),
+		TTFB:    a.ttfb.stats(),
+	}
 }
