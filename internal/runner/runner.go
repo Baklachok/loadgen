@@ -1,11 +1,10 @@
+// Прогон целиком: что он принимает на вход, что отдаёт наружу и как
+// собирается из движка, расписания и клиента.
 package runner
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
 	"time"
 )
 
@@ -17,88 +16,6 @@ type Result struct {
 	BytesRead  int64
 	Trace      *Trace // разбивка по фазам; nil, когда трассировка выключена
 	Warmup     bool   // запрос из прогрева: в статистику не идёт
-}
-
-type Config struct {
-	URL         string
-	Method      string
-	Body        []byte
-	Headers     http.Header
-	Requests    int
-	Duration    time.Duration // режим -z, взаимоисключающе с Requests
-	Concurrency int
-	Timeout     time.Duration
-	Rate        float64 // >0 — open-loop с постоянной частотой; 0 — closed-loop
-	Trace       bool    // собирать разбивку latency по фазам соединения
-
-	// Прогрев: первые запросы платят за TCP, TLS и холодные кэши сервера,
-	// к установившейся нагрузке это отношения не имеет. Задаётся либо числом
-	// запросов, либо длительностью — не тем и другим сразу. Прогрев входит
-	// в прогон, а не добавляется к нему: -n 1000 -warmup 100 шлёт 1000
-	// запросов, из которых измеряются 900.
-	WarmupRequests int
-	WarmupDuration time.Duration
-
-	DisableKeepAlive bool
-	Insecure         bool
-	HTTP2            bool
-}
-
-func (c Config) Validate() error {
-	if c.URL == "" {
-		return errors.New("URL не задан")
-	}
-	if _, err := url.Parse(c.URL); err != nil {
-		return fmt.Errorf("некорректный URL: %w", err)
-	}
-	if c.Concurrency < 1 {
-		return fmt.Errorf("concurrency должен быть >= 1, получено %d", c.Concurrency)
-	}
-	if c.Requests < 1 && c.Duration <= 0 {
-		return errors.New("нужен либо -n, либо -z")
-	}
-	if c.Requests > 0 && c.Duration > 0 {
-		return errors.New("-n и -z взаимоисключающи")
-	}
-	if c.Timeout <= 0 {
-		return fmt.Errorf("timeout должен быть > 0, получено %v", c.Timeout)
-	}
-	if c.Rate < 0 {
-		return fmt.Errorf("rate не может быть отрицательным, получено %v", c.Rate)
-	}
-	return c.validateWarmup()
-}
-
-func (c Config) validateWarmup() error {
-	if c.WarmupRequests < 0 || c.WarmupDuration < 0 {
-		return errors.New("прогрев не может быть отрицательным")
-	}
-	if c.WarmupRequests > 0 && c.WarmupDuration > 0 {
-		return errors.New("прогрев задаётся либо числом запросов, либо длительностью, но не обоими")
-	}
-
-	// Прогрев, съедающий весь прогон, оставляет пустую статистику —
-	// это молчаливо бесполезный результат, лучше сказать сразу.
-	if c.Requests > 0 && c.WarmupRequests >= c.Requests {
-		return fmt.Errorf("прогрев в %d запросов не оставляет что измерять из %d", c.WarmupRequests, c.Requests)
-	}
-	if c.Duration > 0 && c.WarmupDuration >= c.Duration {
-		return fmt.Errorf("прогрев в %v не оставляет времени на измерение из %v", c.WarmupDuration, c.Duration)
-	}
-	return nil
-}
-
-// hasMore сообщает, нужно ли выдавать задачу номер i: в режиме -z предела по
-// количеству нет, в режиме -n их ровно Requests.
-func (c Config) hasMore(i int) bool {
-	return c.Duration > 0 || i < c.Requests
-}
-
-// offset — на сколько позже старта по расписанию должен уйти запрос номер i.
-// Считаем от начала, а не «предыдущий плюс период»: иначе ошибка округления
-// каждого шага накапливается.
-func (c Config) offset(i int) time.Duration {
-	return time.Duration(float64(i) * float64(time.Second) / c.Rate)
 }
 
 // Report — что дал прогон. Окно измерения отдаётся вместе с замерами
@@ -137,49 +54,34 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		return Report{}, fmt.Errorf("не удалось собрать запрос: %w", err)
 	}
 
-	// runCtx гасит выдачу новых задач; ctx живёт до Ctrl+C, поэтому запросы,
-	// уже улетевшие в сеть, дорабатывают и не превращаются в фейковые таймауты
-	runCtx := ctx
-	if cfg.Duration > 0 {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(ctx, cfg.Duration)
-		defer cancel()
-	}
+	runCtx, cancel := deadline(ctx, cfg)
+	defer cancel()
 
 	tr := newTransport(cfg)
 	defer tr.CloseIdleConnections()
 
 	results := make(chan Result, cfg.Concurrency)
-	e := &engine{
-		cfg:      cfg,
-		client:   newClient(cfg, tr),
-		factory:  factory,
-		out:      results,
-		runStart: time.Now(),
-	}
+	e := newEngine(cfg, factory, tr, results)
 
 	go func() {
 		defer close(results)
-		if cfg.Rate > 0 {
-			e.openLoop(ctx, runCtx)
-			return
-		}
-		e.closedLoop(ctx, runCtx)
+		e.loop(ctx, runCtx)
 	}()
 
 	all := collect(results, cfg.Requests)
-	end := time.Now()
 
-	return Report{
-		Results:    all,
-		Elapsed:    end.Sub(e.runStart),
-		Window:     e.measuredWindow(end),
-		TargetRate: cfg.Rate,
-		StartedAt:  e.runStart,
-		Proto:      e.observedProto(),
-		// Дедлайн -z живёт в runCtx; отменённым ctx бывает только по сигналу.
-		Interrupted: ctx.Err() != nil,
-	}, nil
+	// Дедлайн -z живёт в runCtx; отменённым ctx бывает только по сигналу.
+	return e.report(all, time.Now(), ctx.Err() != nil), nil
+}
+
+// deadline даёт контекст, гасящий выдачу новых задач по -z. Родительский ctx
+// живёт дольше: запросы, уже улетевшие в сеть, обязаны дорабатывать, иначе
+// они превратятся в фейковые таймауты на последней секунде прогона.
+func deadline(ctx context.Context, cfg Config) (context.Context, context.CancelFunc) {
+	if cfg.Duration > 0 {
+		return context.WithTimeout(ctx, cfg.Duration)
+	}
+	return context.WithCancel(ctx)
 }
 
 // collect преаллоцирует слайс под ожидаемое число запросов. В режиме -z оно

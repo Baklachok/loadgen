@@ -32,6 +32,34 @@ type engine struct {
 	proto atomic.Pointer[string]
 }
 
+// newEngine фиксирует момент старта: от него отсчитывается и прогрев,
+// и полная длительность прогона, поэтому взять его надо один раз и строго
+// до первого запроса.
+func newEngine(cfg Config, factory *requestFactory, tr *http.Transport, out chan<- Result) *engine {
+	return &engine{
+		cfg:      cfg,
+		client:   newClient(cfg, tr),
+		factory:  factory,
+		out:      out,
+		runStart: time.Now(),
+	}
+}
+
+// report собирает итог прогона. Живёт на engine, а не в Run, потому что
+// половину полей знает только он: когда начали, когда начали мерить
+// и о чём в итоге договорились с сервером.
+func (e *engine) report(all []Result, end time.Time, interrupted bool) Report {
+	return Report{
+		Results:     all,
+		Elapsed:     end.Sub(e.runStart),
+		Window:      e.measuredWindow(end),
+		TargetRate:  e.cfg.Rate,
+		StartedAt:   e.runStart,
+		Proto:       e.observedProto(),
+		Interrupted: interrupted,
+	}
+}
+
 // observedProto — по чему реально договорились с сервером. Пусто, если
 // ни один ответ не пришёл.
 func (e *engine) observedProto() string {

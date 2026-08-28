@@ -8,6 +8,34 @@ import (
 	"time"
 )
 
+// loop выбирает форму нагрузки. Развилка живёт здесь, рядом с обеими
+// формами, а не в Run: тот собирает прогон и не должен знать, из чего
+// именно выбирает.
+func (e *engine) loop(ctx, runCtx context.Context) {
+	if e.cfg.Rate > 0 {
+		e.openLoop(ctx, runCtx)
+		return
+	}
+	e.closedLoop(ctx, runCtx)
+}
+
+// hasMore и offset — это расписание, а не настройка. Живут рядом с циклами,
+// которые их спрашивают: меняются они вместе с формой нагрузки, а не вместе
+// с набором флагов.
+
+// hasMore сообщает, нужно ли выдавать задачу номер i: в режиме -z предела по
+// количеству нет, в режиме -n их ровно Requests.
+func (c Config) hasMore(i int) bool {
+	return c.Duration > 0 || i < c.Requests
+}
+
+// offset — на сколько позже старта по расписанию должен уйти запрос номер i.
+// Считаем от начала, а не «предыдущий плюс период»: иначе ошибка округления
+// каждого шага накапливается.
+func (c Config) offset(i int) time.Duration {
+	return time.Duration(float64(i) * float64(time.Second) / c.Rate)
+}
+
 // closedLoop: Concurrency воркеров, каждый шлёт следующий запрос только после
 // того, как ответил сервер. Частота — какую выдержит сервер, не наша.
 func (e *engine) closedLoop(ctx, runCtx context.Context) {

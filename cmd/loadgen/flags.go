@@ -1,6 +1,5 @@
-// Флаги: собственные реализации flag.Value, объявление всего набора
-// и сборка конфигурации прогона. Меняется вместе — при добавлении флага
-// правится и объявление, и конфиг.
+// Объявление набора флагов и сборка конфигурации прогона. Держатся вместе
+// намеренно: при добавлении флага правится и то, и другое.
 package main
 
 import (
@@ -8,80 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Baklachok/loadgen/internal/runner"
 	"github.com/Baklachok/loadgen/internal/slo"
 )
-
-type headerFlag struct {
-	h http.Header
-}
-
-func (f *headerFlag) String() string {
-	if f.h == nil {
-		return ""
-	}
-	parts := make([]string, 0, len(f.h))
-	for k, vs := range f.h {
-		for _, v := range vs {
-			parts = append(parts, k+": "+v)
-		}
-	}
-	return strings.Join(parts, ", ")
-}
-
-func (f *headerFlag) Set(value string) error {
-	k, v, ok := strings.Cut(value, ":")
-	if !ok {
-		return fmt.Errorf("заголовок должен быть в формате 'Key: Value', получено %q", value)
-	}
-	k = strings.TrimSpace(k)
-	v = strings.TrimSpace(v)
-	if k == "" {
-		return fmt.Errorf("пустое имя заголовка в %q", value)
-	}
-	if f.h == nil {
-		f.h = make(http.Header)
-	}
-	f.h.Add(k, v)
-	return nil
-}
-
-// warmupFlag принимает либо длительность («5s»), либо число запросов («100»).
-// Формы различимы однозначно: time.ParseDuration требует единицы измерения,
-// поэтому «100» ей не подходит, а «5s» не подходит strconv.Atoi.
-type warmupFlag struct {
-	requests int
-	duration time.Duration
-}
-
-func (f *warmupFlag) String() string {
-	switch {
-	case f.duration > 0:
-		return f.duration.String()
-	case f.requests > 0:
-		return strconv.Itoa(f.requests)
-	}
-	return ""
-}
-
-func (f *warmupFlag) Set(value string) error {
-	// Повторный флаг перетирает предыдущий целиком, как это делают обычные
-	// флаги: иначе «-warmup 5s -warmup 100» выставит обе формы разом.
-	if d, err := time.ParseDuration(value); err == nil {
-		f.duration, f.requests = d, 0
-		return nil
-	}
-	if n, err := strconv.Atoi(value); err == nil {
-		f.requests, f.duration = n, 0
-		return nil
-	}
-	return fmt.Errorf("прогрев %q: ожидается длительность (5s) или число запросов (100)", value)
-}
 
 // flags — объявленные флаги одним типом: иначе run таскает полтора десятка
 // указателей через все свои шаги.
@@ -153,21 +83,44 @@ func setFlags(fs *flag.FlagSet) map[string]bool {
 	return set
 }
 
-// config собирает конфиг прогона и ловит противоречие, которого Validate
-// увидеть не может: он смотрит на значения, а не на то, задавал ли их человек.
+// conflicts — правила, которых Validate увидеть не может: он смотрит на
+// значения, а «называл ли человек флаг» в значении не отражается. Сюда же
+// пойдут следующие правила матрицы несовместимостей.
+func (f *flags) conflicts(set map[string]bool) error {
+	if set["n"] && set["z"] {
+		return errors.New("-n и -z взаимоисключающи")
+	}
+	// Тело без метода — это GET с телом. По HTTP законно, но человек почти
+	// наверняка имел в виду POST и молча получит не тот прогон.
+	if *f.body != "" && !set["m"] {
+		return errors.New("-d задан без -m: тело уйдёт методом GET; укажите -m POST")
+	}
+	return nil
+}
+
+// config собирает конфиг прогона: отвергает противоречия, приводит значения
+// к тому, что человек имел в виду, и отдаёт остальное на проверку Validate.
 func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 	// Заданы ли флаги явно, знает только FlagSet: сравнение с умолчанием
 	// не годится — «-n 200 -z 5s» тоже противоречие, хотя 200 это дефолт,
 	// а «-slo-error-rate 0» это осмысленное «ни одной ошибки».
 	set := setFlags(fs)
-	if set["n"] && set["z"] {
-		return runner.Config{}, errors.New("-n и -z взаимоисключающи")
+	if err := f.conflicts(set); err != nil {
+		return runner.Config{}, err
 	}
 
 	// -n обнуляется при -z, иначе Validate решит, что заданы оба.
 	requests := *f.n
 	if *f.z > 0 {
 		requests = 0
+	}
+
+	// Умолчание -c не должно спорить с -n: без этого «-n 10» отчитывается
+	// о пятидесяти потоках, из которых работали десять. Явное -c не трогаем —
+	// там человек сказал противоречие вслух, и Validate ответит ошибкой.
+	concurrency := *f.c
+	if !set["c"] && *f.rate == 0 && requests > 0 && concurrency > requests {
+		concurrency = requests
 	}
 
 	cfg := runner.Config{
@@ -177,7 +130,7 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 		Headers:          f.headers.h,
 		Requests:         requests,
 		Duration:         *f.z,
-		Concurrency:      *f.c,
+		Concurrency:      concurrency,
 		Timeout:          *f.timeout,
 		Rate:             *f.rate,
 		Trace:            *f.trace,
