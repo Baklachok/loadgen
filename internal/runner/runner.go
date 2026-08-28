@@ -113,6 +113,13 @@ type Report struct {
 	// TargetRate — заданная частота open-loop, 0 в closed-loop. Едет вместе
 	// с замерами, чтобы отчёт мог сопоставить обещанное с полученным.
 	TargetRate float64
+
+	// StartedAt и Proto нужны отчёту, чтобы прогон можно было повторить
+	// через полгода. Протокол известен только после первого ответа, поэтому
+	// приходит отсюда, а не из конфига: сервер мог договориться не о том,
+	// что просили.
+	StartedAt time.Time
+	Proto     string
 }
 
 func Run(ctx context.Context, cfg Config) (Report, error) {
@@ -163,6 +170,8 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		Elapsed:    end.Sub(e.runStart),
 		Window:     e.measuredWindow(end),
 		TargetRate: cfg.Rate,
+		StartedAt:  e.runStart,
+		Proto:      e.observedProto(),
 	}, nil
 }
 

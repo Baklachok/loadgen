@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptrace"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -26,6 +25,20 @@ type engine struct {
 	// measuredFrom — момент старта первого запроса, попавшего в измерения,
 	// в наносекундах Unix. Ноль означает, что мерить ещё не начинали.
 	measuredFrom atomic.Int64
+
+	// proto — протокол первого ответа. Хранится строкой, а не в каждом
+	// Result: на миллионах запросов это были бы лишние сотни мегабайт
+	// ради значения, одинакового для всего прогона.
+	proto atomic.Pointer[string]
+}
+
+// observedProto — по чему реально договорились с сервером. Пусто, если
+// ни один ответ не пришёл.
+func (e *engine) observedProto() string {
+	if p := e.proto.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // measuredWindow — сколько времени длилось измерение. Без прогрева совпадает
@@ -80,6 +93,12 @@ func (e *engine) do(ctx context.Context) Result {
 	}
 	defer resp.Body.Close()
 
+	// Копия, а не &resp.Proto: указатель внутрь ответа удержал бы весь
+	// http.Response живым до конца прогона. CAS без проверки — промах
+	// безвреден, побеждает первый ответивший.
+	proto := resp.Proto
+	e.proto.CompareAndSwap(nil, &proto)
+
 	n, err := io.Copy(io.Discard, resp.Body)
 	if err != nil {
 		return Result{Duration: time.Since(start), Err: err, BytesRead: n, Trace: t.snapshot()}
@@ -110,85 +129,4 @@ func (e *engine) emit(ctx context.Context, lag time.Duration) {
 		return
 	}
 	e.out <- res
-}
-
-// closedLoop: Concurrency воркеров, каждый шлёт следующий запрос только после
-// того, как ответил сервер. Частота — какую выдержит сервер, не наша.
-func (e *engine) closedLoop(ctx, runCtx context.Context) {
-	jobs := make(chan struct{}, e.cfg.Concurrency)
-	go e.feed(runCtx, jobs)
-
-	var wg sync.WaitGroup
-	for i := 0; i < e.cfg.Concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range jobs {
-				e.emit(ctx, 0)
-				if runCtx.Err() != nil {
-					return
-				}
-			}
-		}()
-	}
-	wg.Wait()
-}
-
-// feed выдаёт задачи, пока прогон не исчерпан и не отменён.
-func (e *engine) feed(runCtx context.Context, jobs chan<- struct{}) {
-	defer close(jobs)
-
-	for i := 0; e.cfg.hasMore(i); i++ {
-		select {
-		case jobs <- struct{}{}:
-		case <-runCtx.Done():
-			return
-		}
-	}
-}
-
-// openLoop: запросы уходят по расписанию Rate в секунду независимо от того,
-// ответил ли сервер на предыдущие. Concurrency здесь — потолок числа запросов
-// в полёте: упёрлись в него — расписание начинает отставать, и это отставание
-// оседает в Result.Lag, а не растворяется в цифрах (coordinated omission).
-func (e *engine) openLoop(ctx, runCtx context.Context) {
-	slots := make(chan struct{}, e.cfg.Concurrency)
-
-	var wg sync.WaitGroup
-	defer wg.Wait()
-
-	// Один переиспользуемый таймер вместо time.After на каждый запрос:
-	// на высоких частотах его аллокация сама попала бы в измерения.
-	// Reset без вычитки канала корректен начиная с go 1.23 (см. go.mod).
-	timer := time.NewTimer(time.Hour)
-	timer.Stop()
-	defer timer.Stop()
-
-	start := time.Now()
-	for i := 0; e.cfg.hasMore(i); i++ {
-		due := start.Add(e.cfg.offset(i))
-
-		if wait := time.Until(due); wait > 0 {
-			timer.Reset(wait)
-			select {
-			case <-timer.C:
-			case <-runCtx.Done():
-				return
-			}
-		}
-
-		select {
-		case slots <- struct{}{}:
-		case <-runCtx.Done():
-			return
-		}
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-slots }()
-
-			e.emit(ctx, max(0, time.Since(due)))
-		}()
-	}
 }

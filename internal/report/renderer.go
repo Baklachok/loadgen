@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/Baklachok/loadgen/internal/runner"
 	"github.com/Baklachok/loadgen/internal/stats"
 )
 
@@ -16,7 +15,7 @@ import (
 type Renderer interface {
 	// Header печатается до прогона. В машинных форматах его быть не должно:
 	// на stdout обязан оказаться только разбираемый документ.
-	Header(w io.Writer, cfg runner.Config, opt Options) error
+	Header(w io.Writer, opt Options) error
 
 	Render(w io.Writer, s stats.Summary, opt Options) error
 }
@@ -35,9 +34,9 @@ func NewRenderer(format string) (Renderer, error) {
 
 type textRenderer struct{}
 
-func (textRenderer) Header(w io.Writer, cfg runner.Config, opt Options) error {
+func (textRenderer) Header(w io.Writer, opt Options) error {
 	ew := &errWriter{w: w}
-	writeHeader(ew, cfg, opt)
+	writeHeader(ew, opt)
 	return ew.err
 }
 
@@ -50,7 +49,7 @@ func (textRenderer) Render(w io.Writer, s stats.Summary, opt Options) error {
 type jsonRenderer struct{}
 
 // Header ничего не печатает: любая лишняя строка на stdout ломает `| jq`.
-func (jsonRenderer) Header(io.Writer, runner.Config, Options) error { return nil }
+func (jsonRenderer) Header(io.Writer, Options) error { return nil }
 
 func (jsonRenderer) Render(w io.Writer, s stats.Summary, opt Options) error {
 	return writeJSON(w, s, opt)

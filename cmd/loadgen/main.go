@@ -148,6 +148,7 @@ func main() {
 		Color:    report.ColorEnabled(os.Stdout),
 		Width:    report.TerminalWidth(os.Stdout, 80),
 		OpenLoop: cfg.Rate > 0,
+		Run:      report.RunInfo{Version: buildVersion(), Config: cfg},
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -159,7 +160,7 @@ func main() {
 	}()
 
 	// Печатать ли шапку, решает сам рендерер: в машинных форматах её нет.
-	if err := renderer.Header(os.Stdout, cfg, opt); err != nil {
+	if err := renderer.Header(os.Stdout, opt); err != nil {
 		fmt.Fprintln(os.Stderr, "ошибка вывода:", err)
 		os.Exit(1)
 	}
@@ -170,6 +171,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ошибка:", err)
 		os.Exit(1)
 	}
+
+	// Протокол и время старта известны только после прогона.
+	opt.Run.Proto, opt.Run.StartedAt = rep.Proto, rep.StartedAt
 
 	if err := renderer.Render(os.Stdout, stats.Compute(rep), opt); err != nil {
 		fmt.Fprintln(os.Stderr, "ошибка вывода:", err)

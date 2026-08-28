@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"math"
+	"runtime"
 	"time"
 
 	"github.com/Baklachok/loadgen/internal/stats"
@@ -48,7 +49,26 @@ type jsonTrace struct {
 	TTFB    jsonPhase `json:"ttfb"`
 }
 
+// jsonConfig — те же поля, что в блоке «Прогон» текстового отчёта.
+// Без них сохранённый JSON через полгода не воспроизвести.
+type jsonConfig struct {
+	Version     string  `json:"version"`
+	URL         string  `json:"url"`
+	Method      string  `json:"method"`
+	Requests    int     `json:"requests"`
+	DurationMs  float64 `json:"duration_ms"`
+	Concurrency int     `json:"concurrency"`
+	Rate        float64 `json:"rate"`
+	TimeoutMs   float64 `json:"timeout_ms"`
+	KeepAlive   bool    `json:"keepalive"`
+	Proto       string  `json:"proto"`
+	GOMAXPROCS  int     `json:"gomaxprocs"`
+	StartedAt   string  `json:"started_at"`
+}
+
 type jsonSummary struct {
+	Config jsonConfig `json:"config"`
+
 	Total         int     `json:"total"`
 	Warmup        int     `json:"warmup_discarded"`
 	OK            int     `json:"ok"`
@@ -121,6 +141,7 @@ func phase(ph stats.PhaseStats) jsonPhase {
 
 func writeJSON(w io.Writer, s stats.Summary, opt Options) error {
 	out := jsonSummary{
+		Config:        runConfig(opt.Run),
 		Total:         s.Total,
 		Warmup:        s.Warmup,
 		OK:            s.OK,
@@ -167,4 +188,22 @@ func writeJSON(w io.Writer, s stats.Summary, opt Options) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func runConfig(run RunInfo) jsonConfig {
+	cfg := run.Config
+	return jsonConfig{
+		Version:     run.Version,
+		URL:         cfg.URL,
+		Method:      cfg.Method,
+		Requests:    cfg.Requests,
+		DurationMs:  ms(cfg.Duration),
+		Concurrency: cfg.Concurrency,
+		Rate:        cfg.Rate,
+		TimeoutMs:   ms(cfg.Timeout),
+		KeepAlive:   !cfg.DisableKeepAlive,
+		Proto:       run.Proto,
+		GOMAXPROCS:  runtime.GOMAXPROCS(0),
+		StartedAt:   run.StartedAt.Format(time.RFC3339),
+	}
 }
