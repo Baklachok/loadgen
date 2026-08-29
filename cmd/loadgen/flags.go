@@ -44,6 +44,9 @@ type headerFlag struct {
 	h http.Header
 }
 
+// -H повторяется, значит в файле ему можно дать список: см. repeatable в file.go.
+func (*headerFlag) repeatable() {}
+
 func (f *headerFlag) String() string {
 	parts := make([]string, 0, len(f.h))
 	for k, vs := range f.h {

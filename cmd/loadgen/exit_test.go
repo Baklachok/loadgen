@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +149,39 @@ func TestMalformedMethodRefusedBeforeHeader(t *testing.T) {
 			}
 			if !strings.Contains(stderr, "метод") {
 				t.Errorf("причина не названа: %s", stderr)
+			}
+		})
+	}
+}
+
+// Ошибка записи отчёта обязана стать кодом 2: код 0 при оборванном
+// документе — ложь для CI. /dev/full отдаёт ENOSPC на каждую запись;
+// для text это ловит уже Header, для json — Render, обе ветки load.go.
+// (Закрытый stdout сюда не относится: Go-рантайм подставляет на его место
+// /dev/null, и это неотличимо от законного «>/dev/null» ради кода выхода.)
+func TestReportWriteFailureExitsNoRun(t *testing.T) {
+	full, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skip("нет /dev/full:", err)
+	}
+	defer full.Close()
+	url := newTestServer(t)
+
+	for _, o := range []string{"json", "text"} {
+		t.Run("-o "+o, func(t *testing.T) {
+			inR, inW := pipe(t)
+			inW.Close()
+			errR, errW := pipe(t)
+			stderr := drain(errR)
+
+			code := run([]string{"-o", o, "-n", "1", url}, inR, full, errW)
+			errW.Close()
+
+			if code != exitNoRun {
+				t.Errorf("код %d, ожидался %d", code, exitNoRun)
+			}
+			if got := <-stderr; !strings.Contains(got, "ошибка вывода") {
+				t.Errorf("причина не названа: %q", got)
 			}
 		})
 	}

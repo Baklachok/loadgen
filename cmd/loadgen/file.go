@@ -106,19 +106,30 @@ func (f *flags) applyFile(path string) (url string, err error) {
 	return url, nil
 }
 
-// setEach — список ставится по элементу, как повторённый флаг (-H … -H …);
-// скаляр — одной строкой. Все наши flag.Value разбирают строку.
+// repeatable — flag.Value, принимающий несколько значений (-H … -H …).
+// Интерфейс у потребителя: setEach спрашивает, флаг отвечает маркером.
+type repeatable interface{ repeatable() }
+
+// setEach — скаляр ставится одной строкой; список — по элементу, как
+// повторённый флаг, но только тому, кто умеет повторяться: «n: [1, 2]»
+// молча ставил последний. Карта не годится никому — fmt.Sprint сделал
+// бы из «body: {a: 1}» тело «map[a:1]», и запрос ушёл бы с ним.
 func setEach(fs *flag.FlagSet, name string, value any) error {
-	items, ok := value.([]any)
-	if !ok {
-		items = []any{value}
-	}
-	for _, it := range items {
-		if err := fs.Set(name, fmt.Sprint(it)); err != nil {
-			return err
+	switch v := value.(type) {
+	case map[string]any:
+		return errors.New("ожидался скаляр, а не таблица")
+	case []any:
+		if _, ok := fs.Lookup(name).Value.(repeatable); !ok {
+			return errors.New("ожидался скаляр, а не список")
 		}
+		for _, it := range v {
+			if err := fs.Set(name, fmt.Sprint(it)); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return nil
+	return fs.Set(name, fmt.Sprint(value))
 }
 
 // isFileError — ошибка пришла из файла, а не из Parse.

@@ -47,6 +47,7 @@ func TestFileEqualsFlags(t *testing.T) {
 		{"warmup по времени", "warmup: 2s", []string{"-warmup", "2s"}},
 		{"trace", "trace: true", []string{"-trace"}},
 		{"список заголовков", "headers:\n  - \"X-A: 1\"\n  - \"X-B: 2\"", []string{"-H", "X-A: 1", "-H", "X-B: 2"}},
+		{"один заголовок скаляром", "headers: \"X-A: 1\"", []string{"-H", "X-A: 1"}},
 	}
 
 	for _, tt := range tests {
@@ -161,6 +162,12 @@ func TestFileRefusals(t *testing.T) {
 		{"битый YAML", []string{"-f", yamlFile(t, "n: [\n"), "http://x/"}, "-f"},
 		{"файла нет", []string{"-f", filepath.Join(t.TempDir(), "нет.yaml"), "http://x/"}, "-f"},
 		{"-f с -compare", []string{"-compare", "-f", yamlFile(t, "n: 1\n"), "a", "b"}, "-compare"},
+		// Список — только повторяемому флагу: «n: [1, 2]» молча ставил последний.
+		// Карта — никому: fmt.Sprint сделал бы тело «map[a:1]».
+		{"список для скаляра", []string{"-f", yamlFile(t, "n: [1, 2]\n"), "http://x/"}, "список"},
+		{"пустой список для скаляра", []string{"-f", yamlFile(t, "requests: []\n"), "http://x/"}, "список"},
+		{"таблица вместо тела", []string{"-f", yamlFile(t, "body: {a: 1}\n"), "http://x/"}, "таблица"},
+		{"таблица вместо заголовков", []string{"-f", yamlFile(t, "headers: {X: 1}\n"), "http://x/"}, "таблица"},
 		// Файл ставит флаг через тот же Set, и «задан ли» его видит.
 		{"duration: 0s в файле", []string{"-f", yamlFile(t, "duration: 0s\n"), "http://x/"}, "-z"},
 		{"method: \"\" в файле", []string{"-f", yamlFile(t, "method: \"\"\n"), "http://x/"}, "метод"},
