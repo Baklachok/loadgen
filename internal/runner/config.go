@@ -67,6 +67,13 @@ func (c Config) validateTarget() error {
 	if err != nil {
 		return fmt.Errorf("некорректный URL: %w", err)
 	}
+	// gRPC — граница проекта, не забытая схема: «без схемы http://» отправил
+	// бы человека дописывать http и получать N отказов от gRPC-сервера.
+	// Причина в README «Границы»: успех, коды и фазы — HTTP-семантика,
+	// и она же в JSON-контракте.
+	if u.Scheme == "grpc" || u.Scheme == "grpcs" {
+		return errors.New("gRPC не поддерживается: loadgen — нагрузочник для HTTP, см. README «Границы»")
+	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("URL %q без схемы http:// или https://", c.URL)
 	}

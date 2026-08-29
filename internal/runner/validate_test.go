@@ -35,6 +35,10 @@ func TestValidate(t *testing.T) {
 		// самый коварный случай, потому что похоже на рабочий адрес.
 		{"хост с портом без схемы", func(c *Config) { c.URL = "localhost:8080/api" }, "без схемы"},
 		{"чужая схема", func(c *Config) { c.URL = "ftp://localhost/x" }, "без схемы"},
+		// gRPC — граница проекта; ошибка обязана назвать его, а не отправить
+		// дописывать http:// к gRPC-серверу.
+		{"grpc — по имени, не «без схемы»", func(c *Config) { c.URL = "grpc://localhost:50051/pkg.Svc/M" }, "gRPC"},
+		{"grpcs — тоже", func(c *Config) { c.URL = "grpcs://localhost:50051" }, "gRPC"},
 		{"схема без хоста", func(c *Config) { c.URL = "http:///api" }, "нет хоста"},
 		{"https принимается", func(c *Config) { c.URL = "https://example.com" }, ""},
 
