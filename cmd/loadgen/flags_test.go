@@ -54,6 +54,23 @@ func TestConfigRejectsContradictions(t *testing.T) {
 		accepts(t, "-z", "1ms")
 	})
 
+	// Для slo «≤ 0» и «< 0» — «не задано», 150% не нарушить никогда: гейт
+	// молча не стоял, rc=0 против любого сервера. Границы включительно:
+	// 0 — «ни одной ошибки», 100 — законный, хоть и беззубый.
+	t.Run("-slo-p99 не больше нуля", func(t *testing.T) {
+		rejects(t, "-slo-p99", "-slo-p99", "0s")
+		rejects(t, "-slo-p99", "-slo-p99", "-1ms")
+		accepts(t, "-slo-p99", "1ms")
+	})
+	t.Run("-slo-error-rate вне 0–100", func(t *testing.T) {
+		for _, bad := range []string{"-1", "101", "150"} {
+			rejects(t, "-slo-error-rate", "-slo-error-rate", bad)
+		}
+		for _, ok := range []string{"0", "100", "1.5"} {
+			accepts(t, "-slo-error-rate", ok)
+		}
+	})
+
 	// Явное «-c 50 -n 10» — противоречие, сказанное вслух, и отвергается.
 	// То же самое из умолчания -c человек не говорил, и ошибка была бы
 	// хамством: -c подгоняется, чтобы шапка не врала про пятьдесят потоков.

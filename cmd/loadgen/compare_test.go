@@ -98,3 +98,20 @@ func TestCompareMode(t *testing.T) {
 		}
 	})
 }
+
+// Для compare ноль — «порог не задан», и отрицательный попадал туда же:
+// гейт молча выключен. Пути не существуют нарочно: отказ по флагу обязан
+// быть раньше чтения файлов.
+func TestCompareRejectsNegativeThreshold(t *testing.T) {
+	for _, flagName := range []string{"-regress-p99", "-regress-rps"} {
+		t.Run(flagName, func(t *testing.T) {
+			code, _, stderr := capture(t, "-compare", flagName, "-5", "нет/такого", "и/такого")
+			if code != exitUsage {
+				t.Errorf("код %d, ожидался %d", code, exitUsage)
+			}
+			if !strings.Contains(stderr, flagName) {
+				t.Errorf("отказ не про флаг: %s", stderr)
+			}
+		})
+	}
+}

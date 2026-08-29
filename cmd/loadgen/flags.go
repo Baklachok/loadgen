@@ -160,7 +160,7 @@ func newFlags(stderr io.Writer) *flags {
 	fs.Var(&f.rate, "rate", "постоянный RPS, режим open-loop (0 — closed-loop)")
 	fs.Var(&f.regressP99, "regress-p99", "при сравнении: насколько процентов p99 позволено вырасти, иначе код 3")
 	fs.Var(&f.regressRPS, "regress-rps", "при сравнении: насколько процентов RPS позволено упасть, иначе код 3")
-	fs.Var(&f.sloErrorRate, "slo-error-rate", "порог приёмки: доля не-2xx в процентах, иначе код 3")
+	fs.Var(&f.sloErrorRate, "slo-error-rate", "порог приёмки: доля не-2xx в процентах (0–100), иначе код 3")
 	fs.Var(&f.headers, "H", "заголовок в формате 'Key: Value' (можно несколько раз)")
 	fs.Var(&f.warmup, "warmup", "прогрев: длительность (5s) или число запросов (100), в статистику не идёт")
 
@@ -192,17 +192,26 @@ func (f *flags) named() map[string]bool {
 	return set
 }
 
-// conflicts — правила, которых Validate увидеть не может: он смотрит на
-// значения, а «называл ли человек флаг» в значении не отражается. Сюда же
-// пойдут следующие правила матрицы несовместимостей.
-func (f *flags) conflicts(set map[string]bool) error {
+// namedRules — правила, которых Validate увидеть не может: он смотрит на
+// значения, а «называл ли человек флаг» в значении не отражается. Ниже
+// по слоям ноль — «не задано», и названный ноль молча выключал бы то,
+// что человек включал.
+func (f *flags) namedRules(set map[string]bool) error {
 	if set["n"] && set["z"] {
 		return errors.New("-n и -z взаимоисключающи")
 	}
-	// Для Validate нулевая длительность — «не задано», и «-z 0s» молча
-	// превращался в план на 200 запросов. Что -z назван, знает только FlagSet.
-	if set["z"] && *f.z <= 0 {
-		return fmt.Errorf("-z должен быть > 0, получено %v", *f.z)
+	// -z 0s превращался в план на 200 запросов, -slo-p99 0s — в отсутствие гейта.
+	for _, d := range []struct {
+		name string
+		v    time.Duration
+	}{{"z", *f.z}, {"slo-p99", *f.sloP99}} {
+		if set[d.name] && d.v <= 0 {
+			return fmt.Errorf("-%s должен быть > 0, получено %v", d.name, d.v)
+		}
+	}
+	// Отрицательный — «не задано», 150% не нарушить никогда: гейт молча не стоит.
+	if r := float64(f.sloErrorRate); set["slo-error-rate"] && (r < 0 || r > 100) {
+		return fmt.Errorf("-slo-error-rate — проценты, 0–100; получено %v", r)
 	}
 	// Тело без метода — это GET с телом. По HTTP законно, но человек почти
 	// наверняка имел в виду POST и молча получит не тот прогон.
@@ -219,7 +228,7 @@ func (f *flags) config() (runner.Config, error) {
 	// не годится — «-n 200 -z 5s» тоже противоречие, хотя 200 это дефолт,
 	// а «-slo-error-rate 0» это осмысленное «ни одной ошибки».
 	set := f.named()
-	if err := f.conflicts(set); err != nil {
+	if err := f.namedRules(set); err != nil {
 		return runner.Config{}, err
 	}
 
