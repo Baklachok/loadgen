@@ -99,9 +99,12 @@ func (f *warmupFlag) Set(value string) error {
 	return fmt.Errorf("прогрев %q: ожидается длительность (5s) или число запросов (100)", value)
 }
 
-// flags — объявленные флаги одним типом: иначе run таскает полтора десятка
-// указателей через все свои шаги.
+// flags — объявленные флаги и их FlagSet одним типом: иначе run таскает
+// полтора десятка указателей через все свои шаги, а FlagSet — рядом с ними,
+// потому что «был ли флаг назван» знает только он.
 type flags struct {
+	fs *flag.FlagSet
+
 	n, c        *int
 	z, timeout  *time.Duration
 	method      *string
@@ -128,8 +131,11 @@ type flags struct {
 	warmup       warmupFlag
 }
 
-func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
+func newFlags(stderr io.Writer) *flags {
+	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	f := &flags{
+		fs:          fs,
 		n:           fs.Int("n", 200, "количество запросов"),
 		c:           fs.Int("c", 50, "конкурентность; в open-loop — потолок запросов в полёте"),
 		z:           fs.Duration("z", 0, "длительность прогона (взаимоисключающе с -n)"),
@@ -178,11 +184,11 @@ func printUsage(fs *flag.FlagSet, w io.Writer) {
 	}
 }
 
-// setFlags — имена флагов, заданных в командной строке. Нужен там, где
+// named — флаги, заданные явно, строкой или файлом. Нужен там, где
 // умолчание неотличимо от осознанного выбора.
-func setFlags(fs *flag.FlagSet) map[string]bool {
+func (f *flags) named() map[string]bool {
 	set := make(map[string]bool)
-	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	f.fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
 	return set
 }
 
@@ -208,11 +214,11 @@ func (f *flags) conflicts(set map[string]bool) error {
 
 // config собирает конфиг прогона: отвергает противоречия, приводит значения
 // к тому, что человек имел в виду, и отдаёт остальное на проверку Validate.
-func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
+func (f *flags) config() (runner.Config, error) {
 	// Заданы ли флаги явно, знает только FlagSet: сравнение с умолчанием
 	// не годится — «-n 200 -z 5s» тоже противоречие, хотя 200 это дефолт,
 	// а «-slo-error-rate 0» это осмысленное «ни одной ошибки».
-	set := setFlags(fs)
+	set := f.named()
 	if err := f.conflicts(set); err != nil {
 		return runner.Config{}, err
 	}
@@ -244,7 +250,7 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 	}
 
 	cfg := runner.Config{
-		URL:              fs.Arg(0),
+		URL:              f.fs.Arg(0),
 		Method:           method,
 		Body:             []byte(*f.body),
 		Headers:          headers,
@@ -266,9 +272,9 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 // slo собирает пороги приёмки. Не заданный p99 — ноль, и Check его
 // пропускает; у error-rate ноль осмыслен («ни одной ошибки»), поэтому
 // «не задан» там −1, а «задан ли» спрашивается у FlagSet.
-func (f *flags) slo(fs *flag.FlagSet) slo.Thresholds {
+func (f *flags) slo() slo.Thresholds {
 	out := slo.Thresholds{P99: *f.sloP99, ErrorRate: -1}
-	if setFlags(fs)["slo-error-rate"] {
+	if f.named()["slo-error-rate"] {
 		out.ErrorRate = float64(f.sloErrorRate) / 100
 	}
 	return out

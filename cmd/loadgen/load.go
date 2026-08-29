@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -16,9 +15,9 @@ import (
 )
 
 // runLoad прогоняет нагрузку и печатает отчёт.
-func runLoad(f *flags, fs *flag.FlagSet, stdin, stdout, stderr *os.File) int {
-	if fs.NArg() != 1 {
-		fs.Usage()
+func runLoad(f *flags, stdin, stdout, stderr *os.File) int {
+	if f.fs.NArg() != 1 {
+		f.fs.Usage()
 		return exitUsage
 	}
 
@@ -28,7 +27,7 @@ func runLoad(f *flags, fs *flag.FlagSet, stdin, stdout, stderr *os.File) int {
 		return exitUsage
 	}
 
-	cfg, err := f.config(fs)
+	cfg, err := f.config()
 	if err != nil {
 		fmt.Fprintln(stderr, "ошибка:", err)
 		return exitUsage
@@ -95,7 +94,7 @@ func runLoad(f *flags, fs *flag.FlagSet, stdin, stdout, stderr *os.File) int {
 		return exitNoRun
 	}
 
-	return outcome(ctx, summary, f.slo(fs), stderr)
+	return outcome(ctx, summary, f.slo(), stderr)
 }
 
 // outcome переводит итог прогона в код возврата.

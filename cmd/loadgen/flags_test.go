@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"strings"
 	"testing"
 )
@@ -165,8 +166,7 @@ func TestNumericFlagsRejectNonFinite(t *testing.T) {
 	for _, flagName := range []string{"-rate", "-slo-error-rate", "-regress-p99"} {
 		for _, bad := range []string{"nan", "NaN", "inf", "-Inf", "infinity", "1e400"} {
 			t.Run(flagName+" "+bad, func(t *testing.T) {
-				fs, _ := newTestFlags(t)
-				if err := fs.Parse([]string{flagName, bad, localURL}); err == nil {
+				if err := newFlags(io.Discard).parse([]string{flagName, bad, localURL}); err == nil {
 					t.Errorf("%s %s принято", flagName, bad)
 				}
 			})
@@ -174,8 +174,7 @@ func TestNumericFlagsRejectNonFinite(t *testing.T) {
 	}
 	for _, good := range []string{"0", "0.5", "1e9", "-0"} {
 		t.Run("-rate "+good+" принимается", func(t *testing.T) {
-			fs, _ := newTestFlags(t)
-			if err := fs.Parse([]string{"-rate", good, localURL}); err != nil {
+			if err := newFlags(io.Discard).parse([]string{"-rate", good, localURL}); err != nil {
 				t.Errorf("%q отвергнуто: %v", good, err)
 			}
 		})

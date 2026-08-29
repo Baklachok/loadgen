@@ -35,26 +35,26 @@ type errFile struct{ error }
 
 func (e errFile) Unwrap() error { return e.error }
 
-// parseArgs — единственный путь от аргументов к разобранному FlagSet, общий
+// parse — единственный путь от аргументов к разобранному FlagSet, общий
 // для run и тестов: иначе тесты разбирают флаги в обход файла и зелены
 // на сломанном коде. Сначала Parse, потом файл.
-func parseArgs(fs *flag.FlagSet, f *flags, args []string) error {
-	if err := fs.Parse(args); err != nil {
+func (f *flags) parse(args []string) error {
+	if err := f.fs.Parse(args); err != nil {
 		return err
 	}
 	if *f.file == "" {
 		return nil
 	}
 
-	url, err := applyFile(fs, *f.file)
+	url, err := f.applyFile(*f.file)
 	if err != nil {
 		return errFile{err}
 	}
 	// url из файла — позиционный аргумент, и после Parse он ставится только
 	// повторным Parse. Флаги при этом не сбрасываются: FlagSet хранит их
 	// в Value, а Parse лишь заново раскладывает args.
-	if url != "" && fs.NArg() == 0 {
-		return fs.Parse([]string{url})
+	if url != "" && f.fs.NArg() == 0 {
+		return f.fs.Parse([]string{url})
 	}
 	return nil
 }
@@ -72,7 +72,7 @@ func parseArgs(fs *flag.FlagSet, f *flags, args []string) error {
 // с newFlags за день.
 //
 // Неизвестный ключ отвергается по Lookup: словаря допустимых полей нет.
-func applyFile(fs *flag.FlagSet, path string) (url string, err error) {
+func (f *flags) applyFile(path string) (url string, err error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // путь называет человек флагом -f
 	if err != nil {
 		return "", fmt.Errorf("-f: %w", err)
@@ -83,7 +83,7 @@ func applyFile(fs *flag.FlagSet, path string) (url string, err error) {
 		return "", fmt.Errorf("-f %s: %w", path, err)
 	}
 
-	explicit := setFlags(fs)
+	explicit := f.named()
 	for key, value := range doc {
 		if key == urlKey {
 			url = fmt.Sprint(value)
@@ -93,13 +93,13 @@ func applyFile(fs *flag.FlagSet, path string) (url string, err error) {
 		if long, ok := longNames[key]; ok {
 			name = long
 		}
-		if fs.Lookup(name) == nil {
+		if f.fs.Lookup(name) == nil {
 			return "", fmt.Errorf("-f %s: неизвестный ключ %q", path, key)
 		}
 		if explicit[name] {
 			continue
 		}
-		if err := setEach(fs, name, value); err != nil {
+		if err := setEach(f.fs, name, value); err != nil {
 			return "", fmt.Errorf("-f %s: %s: %w", path, key, err)
 		}
 	}

@@ -2,7 +2,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 
@@ -12,8 +11,8 @@ import (
 // runCompare отвечает на вопрос «стало лучше или хуже» и ничего не запускает.
 // Отдельная ветка в run: URL здесь не нужен, подтверждение не спрашивается,
 // накопитель не заводится.
-func runCompare(f *flags, fs *flag.FlagSet, stdout, stderr io.Writer) int {
-	if fs.NArg() != 2 {
+func runCompare(f *flags, stdout, stderr io.Writer) int {
+	if f.fs.NArg() != 2 {
 		fmt.Fprintln(stderr, "ошибка: -compare ждёт два пути — до и после; каждый файл или каталог с *.json")
 		return exitUsage
 	}
@@ -36,12 +35,12 @@ func runCompare(f *flags, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	before, err := compare.Load(fs.Arg(0))
+	before, err := compare.Load(f.fs.Arg(0))
 	if err != nil {
 		fmt.Fprintln(stderr, "ошибка:", err)
 		return exitUsage
 	}
-	after, err := compare.Load(fs.Arg(1))
+	after, err := compare.Load(f.fs.Arg(1))
 	if err != nil {
 		fmt.Fprintln(stderr, "ошибка:", err)
 		return exitUsage

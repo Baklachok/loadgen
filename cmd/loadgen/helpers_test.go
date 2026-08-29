@@ -4,7 +4,6 @@
 package main
 
 import (
-	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -108,25 +107,14 @@ func drain(r *os.File) <-chan string {
 func parseConfig(t *testing.T, args ...string) (runner.Config, error) {
 	t.Helper()
 
-	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	f := newFlags(fs, io.Discard)
+	f := newFlags(io.Discard)
 
 	// Тот же шаг, что в run: файл, url, Parse. Первая версия звала fs.Parse
 	// напрямую и была зелёной, пока applyFile ничего не применял.
-	if err := parseArgs(fs, f, args); err != nil {
+	if err := f.parse(args); err != nil {
 		t.Fatalf("разбор %v: %v", args, err)
 	}
-	return f.config(fs)
-}
-
-// newTestFlags — FlagSet и flags без разбора: для тестов, которым нужен
-// applyFile отдельно от run.
-func newTestFlags(t *testing.T) (*flag.FlagSet, *flags) {
-	t.Helper()
-	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	return fs, newFlags(fs, io.Discard)
+	return f.config()
 }
 
 // newTestServer — пустой 200 на всё; URL живёт, пока живёт тест.

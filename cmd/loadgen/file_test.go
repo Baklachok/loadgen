@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,11 +103,11 @@ func TestFileValuesCountAsExplicit(t *testing.T) {
 	// «slo-error-rate: 0» — это «ни одной ошибки», а не «порог не задан».
 	// Отличить одно от другого может только FlagSet, и только если Set был.
 	t.Run("slo-error-rate 0 из файла — порог задан", func(t *testing.T) {
-		fs, f := newTestFlags(t)
-		if _, err := applyFile(fs, yamlFile(t, "slo-error-rate: 0\n")); err != nil {
+		f := newFlags(io.Discard)
+		if _, err := f.applyFile(yamlFile(t, "slo-error-rate: 0\n")); err != nil {
 			t.Fatal(err)
 		}
-		if thr := f.slo(fs); thr.ErrorRate != 0 {
+		if thr := f.slo(); thr.ErrorRate != 0 {
 			t.Errorf("ErrorRate = %v, ожидался 0 (задан); -1 значило бы «не задан»", thr.ErrorRate)
 		}
 	})
