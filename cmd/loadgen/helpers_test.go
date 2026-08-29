@@ -110,8 +110,19 @@ func parseConfig(t *testing.T, args ...string) (runner.Config, error) {
 	fs.SetOutput(io.Discard)
 	f := newFlags(fs, io.Discard)
 
-	if err := fs.Parse(args); err != nil {
+	// Тот же шаг, что в run: файл, url, Parse. Первая версия звала fs.Parse
+	// напрямую и была зелёной, пока applyFile ничего не применял.
+	if err := parseArgs(fs, f, args); err != nil {
 		t.Fatalf("разбор %v: %v", args, err)
 	}
 	return f.config(fs)
+}
+
+// newTestFlags — FlagSet и flags без разбора: для тестов, которым нужен
+// applyFile отдельно от run.
+func newTestFlags(t *testing.T) (*flag.FlagSet, *flags) {
+	t.Helper()
+	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs, newFlags(fs, io.Discard)
 }

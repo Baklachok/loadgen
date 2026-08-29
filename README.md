@@ -70,7 +70,26 @@ loadgen -m POST -d '{"a":1}' -H 'Content-Type: application/json' http://localhos
 | `-regress-p99` | — | при сравнении: на сколько процентов p99 позволено вырасти |
 | `-regress-rps` | — | при сравнении: на сколько процентов RPS позволено упасть |
 | `-metrics` | — | адрес `/metrics` на время прогона, например `:9090` |
+| `-f` | — | прогон из YAML-файла; флаги в строке перекрывают файл |
 | `-version` | | показать версию |
+
+### Файл конфига
+
+```yaml
+url: http://svc/api
+method: POST
+headers: ["Content-Type: application/json"]
+body: '{"a":1}'
+duration: 30s
+rate: 500
+concurrency: 200
+slo-p99: 200ms
+slo-error-rate: 1
+```
+
+`loadgen -f run.yaml`. Ключ — имя флага или его длинная форма; флаг в строке
+перекрывает файл. Блок `config` из JSON-отчёта переписывается в такой файл —
+прогон повторяется.
 
 ### Коды выхода
 

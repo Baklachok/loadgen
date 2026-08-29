@@ -1,3 +1,18 @@
+// Команда loadgen. Десять файлов, и по алфавиту не видно, что из них вход,
+// что режимы, что обвязка, — поэтому карта, в порядке, в каком аргумент
+// проходит путь:
+//
+//	flags.go     флаги, их типы, сборка Config; правило «задан ли флаг»
+//	file.go      -f: тот же набор флагов, но из YAML
+//	main.go      коды выхода и диспетчер run
+//	load.go      режим прогона и его итог
+//	compare.go   режим сравнения двух отчётов
+//	confirm.go   подтверждение для чужой цели
+//	metrics.go   /metrics на время прогона
+//	signal.go    Ctrl+C: остановка и немедленный выход
+//	version.go   версия сборки и User-Agent
+//
+// Карту сторожит TestPackageMap: новый файл без строки здесь — красный тест.
 package main
 
 import (
@@ -36,8 +51,12 @@ func run(args []string, stdin, stdout, stderr *os.File) int {
 	fs.SetOutput(stderr)
 	f := newFlags(fs, stderr)
 
-	// ContinueOnError уже напечатал причину и подсказку; нам остаётся код.
-	if err := fs.Parse(args); err != nil {
+	// Ошибку Parse FlagSet печатает сам вместе с подсказкой; ошибку файла —
+	// нет, она наша и помечена типом.
+	if err := parseArgs(fs, f, args); err != nil {
+		if isFileError(err) {
+			fmt.Fprintln(stderr, "ошибка:", err)
+		}
 		return exitUsage
 	}
 	if *f.showVersion {
