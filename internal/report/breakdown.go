@@ -2,10 +2,8 @@
 package report
 
 import (
-	"cmp"
 	"fmt"
 	"io"
-	"slices"
 	"strconv"
 	"time"
 
@@ -17,7 +15,7 @@ func writeCodes(w io.Writer, s stats.Summary, _ Options, p palette) {
 		return
 	}
 	fmt.Fprintf(w, "\n%s\n", p.bold("Коды ответов"))
-	for _, code := range sortedKeys(s.Codes) {
+	for _, code := range stats.SortedKeys(s.Codes) {
 		fmt.Fprintf(w, "  %s %d\n", colorCode(p, code), s.Codes[code])
 	}
 }
@@ -40,20 +38,9 @@ func writeErrors(w io.Writer, s stats.Summary, _ Options, p palette) {
 		return
 	}
 	fmt.Fprintf(w, "\n%s\n", p.bold("Ошибки"))
-	for _, kind := range sortedKeys(s.Errors) {
+	for _, kind := range stats.SortedKeys(s.Errors) {
 		fmt.Fprintf(w, "  %s %d\n", p.red(string(kind)), s.Errors[kind])
 	}
-}
-
-// sortedKeys нужен, чтобы два одинаковых прогона печатались одинаково:
-// обход map в Go намеренно рандомизирован.
-func sortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
-	keys := make([]K, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
 }
 
 // Одна строка формата на все три места — заголовок, пустую фазу и заполненную.

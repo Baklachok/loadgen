@@ -44,6 +44,10 @@ type hdr struct {
 	overflowMax time.Duration
 }
 
+// newDistribution — единственное место, где выбирается накопитель. Точная
+// samples остаётся рядом как эталон для тестов, в бою — HDR.
+func newDistribution() distribution { return newHDR() }
+
 func newHDR() *hdr {
 	return &hdr{h: hdrhistogram.New(hdrLowest, hdrHighest, hdrDigits)}
 }

@@ -5,7 +5,11 @@
 // рано или поздно с ними разойдётся при правке.
 package stats
 
-import "time"
+import (
+	"cmp"
+	"slices"
+	"time"
+)
 
 type Summary struct {
 	Total  int // измеренных запросов, без прогрева
@@ -108,4 +112,17 @@ func (s Summary) SuccessRate() float64 {
 		return 0
 	}
 	return float64(s.OK) / float64(s.Total)
+}
+
+// SortedKeys — ключи карты по возрастанию. Живёт здесь, потому что карты
+// Codes и Errors — отсюда, а печатают их два пакета, которые друг о друге
+// не знают: report и prom. Детерминированный порядок нужен обоим — иначе
+// не завести golden.
+func SortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
