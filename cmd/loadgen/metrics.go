@@ -27,7 +27,7 @@ type metricsServer struct {
 // Адреса по умолчанию нет намеренно: слушать порт без просьбы — не дело
 // нагрузочника, у которого и так есть правило «не стрелять куда не просили».
 func listenMetrics(addr string, acc *stats.Accumulator) (*metricsServer, error) {
-	ln, err := net.Listen("tcp", addr)
+	ln, err := net.Listen("tcp", loopbackByDefault(addr))
 	if err != nil {
 		return nil, fmt.Errorf("-metrics: %w", err)
 	}
@@ -53,6 +53,17 @@ func listenMetrics(addr string, acc *stats.Accumulator) (*metricsServer, error) 
 		}
 	}()
 	return m, nil
+}
+
+// loopbackByDefault: «:9090» у net.Listen — все интерфейсы, а /metrics отдаёт
+// цель, RPS и коды любому в сети. Пустой хост значит loopback; наружу —
+// только явным хостом (0.0.0.0:9090).
+func loopbackByDefault(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host != "" {
+		return addr // кривой адрес отвергнет Listen и сам назовёт причину
+	}
+	return net.JoinHostPort("127.0.0.1", port)
 }
 
 // Addr — фактический адрес: при «:0» порт выбирает система.

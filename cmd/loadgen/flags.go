@@ -145,7 +145,7 @@ func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
 		showVersion: fs.Bool("version", false, "показать версию"),
 
 		compare: fs.Bool("compare", false, "сравнить два отчёта: loadgen -compare ДО ПОСЛЕ (файл или каталог)"),
-		metrics: fs.String("metrics", "", "адрес для /metrics на время прогона, например :9090 (по умолчанию выключено)"),
+		metrics: fs.String("metrics", "", "адрес для /metrics на время прогона: :9090 — только loopback, 0.0.0.0:9090 — наружу"),
 		file:    fs.String("f", "", "прогон из YAML-файла; флаги в строке перекрывают файл"),
 		sloP99:  fs.Duration("slo-p99", 0, "порог приёмки: p99 не выше указанного, иначе код 3"),
 
@@ -218,10 +218,8 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 		requests = 0
 	}
 
-	// Регистр метода поднимаем: HTTP их различает, а все зарегистрированные
-	// записаны в верхнем. «-m get» уходило дословно и получало 400 или 501 —
-	// причём Go-сервер отдаёт запрос хендлеру с любым методом, так что
-	// локально прогон выглядел рабочим и ломался ровно при переезде на стенд.
+	// Регистр метода поднимаем: HTTP их различает, а Go-сервер отдаёт хендлеру
+	// любой — «-m get» работал локально и получал 501 на стенде.
 	method := strings.ToUpper(*f.method)
 
 	// Подпись обязательна, но явный -H 'User-Agent: ...' её побеждает:
@@ -260,9 +258,9 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 	return cfg, cfg.Validate()
 }
 
-// slo собирает пороги приёмки. Не заданный порог остаётся нулевым, и Check
-// его пропускает; ноль у error-rate осмыслен сам по себе, поэтому «задан ли»
-// спрашивается у FlagSet, а не угадывается по значению.
+// slo собирает пороги приёмки. Не заданный p99 — ноль, и Check его
+// пропускает; у error-rate ноль осмыслен («ни одной ошибки»), поэтому
+// «не задан» там −1, а «задан ли» спрашивается у FlagSet.
 func (f *flags) slo(fs *flag.FlagSet) slo.Thresholds {
 	out := slo.Thresholds{P99: *f.sloP99, ErrorRate: -1}
 	if setFlags(fs)["slo-error-rate"] {

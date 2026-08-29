@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Baklachok/loadgen/internal/prom"
+	"github.com/Baklachok/loadgen/internal/stats"
 )
 
 func assertPromFormat(t *testing.T, doc string) {
@@ -46,9 +47,13 @@ func TestMetricsEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	// stderr печатает фактический адрес — по нему и найдём порт при «:0».
-	l := launch(t, "-z", "2s", "-c", "4", "-metrics", "127.0.0.1:0", srv.URL)
+	l := launch(t, "-z", "2s", "-c", "4", "-metrics", ":0", srv.URL)
 
 	addr := waitForAddr(t, l.stderrLive)
+	// Без хоста — только loopback: «:0» у net.Listen означало бы [::].
+	if !strings.HasPrefix(addr, "127.0.0.1:") {
+		t.Errorf("адрес %q: без хоста ждали loopback", addr)
+	}
 	first := scrape(t, addr)
 	time.Sleep(300 * time.Millisecond)
 	second := scrape(t, addr)
@@ -137,4 +142,28 @@ func TestMetricsRefusals(t *testing.T) {
 			t.Errorf("код %d, ожидался %d", code, exitUsage)
 		}
 	})
+}
+
+// Пустой хост — loopback; явный хост остаётся как написан, иначе тест был бы
+// зелёным и при слепой подмене.
+func TestMetricsListensOnLoopbackByDefault(t *testing.T) {
+	for _, tc := range []struct {
+		addr     string
+		loopback bool
+	}{
+		{":0", true},
+		{"127.0.0.1:0", true},
+		{"0.0.0.0:0", false},
+	} {
+		t.Run(tc.addr, func(t *testing.T) {
+			m, err := listenMetrics(tc.addr, stats.NewAccumulator(0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			if got := strings.HasPrefix(m.Addr(), "127.0.0.1:"); got != tc.loopback {
+				t.Errorf("%q слушает %q", tc.addr, m.Addr())
+			}
+		})
+	}
 }
