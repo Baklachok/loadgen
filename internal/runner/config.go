@@ -86,6 +86,10 @@ func (c Config) validateTarget() error {
 
 // validateWorkload — сколько работы и в сколько рук.
 func (c Config) validateWorkload() error {
+	// Ноль — «не задано», отрицательное — ошибка, как у timeout и rate.
+	if c.Duration < 0 {
+		return fmt.Errorf("duration не может быть отрицательной, получено %v", c.Duration)
+	}
 	if c.Requests < 1 && c.Duration <= 0 {
 		return errors.New("нужен либо -n, либо -z")
 	}

@@ -46,6 +46,7 @@ func TestValidate(t *testing.T) {
 		{"нет ни -n, ни -z", func(c *Config) { c.Requests = 0 }, "либо -n, либо -z"},
 		{"-n вместе с -z", func(c *Config) { c.Duration = time.Second }, "взаимоисключающи"},
 		{"только -z", func(c *Config) { c.Requests, c.Duration = 0, time.Second }, ""},
+		{"отрицательная длительность", func(c *Config) { c.Requests, c.Duration = 0, -time.Second }, "отрицательн"},
 
 		{"потоков ноль", func(c *Config) { c.Concurrency = 0 }, "concurrency"},
 		// Лишние потоки в closed-loop не сделают ни одного запроса: поток

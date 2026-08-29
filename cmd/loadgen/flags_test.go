@@ -25,6 +25,23 @@ func TestConfigRejectsContradictions(t *testing.T) {
 		}
 	})
 
+	// Для Validate нулевая длительность — «не задано»: «-z 0s» и «-z -1s»
+	// молча становились планом на 200 запросов. Ошибка обязана назвать -z,
+	// а не «duration» из недр runner.
+	t.Run("-z не больше нуля", func(t *testing.T) {
+		for _, z := range []string{"0s", "-1s"} {
+			_, err := parseConfig(t, "-z", z, localURL)
+			if err == nil {
+				t.Errorf("-z %s принят: прогон ушёл бы на -n 200", z)
+			} else if !strings.Contains(err.Error(), "-z") {
+				t.Errorf("-z %s: ошибка не называет флаг: %v", z, err)
+			}
+		}
+		if _, err := parseConfig(t, "-z", "1ms", localURL); err != nil {
+			t.Errorf("-z 1ms отвергнут: %v", err)
+		}
+	})
+
 	// Явное «-c 50 -n 10» — противоречие, сказанное вслух, и отвергается.
 	// То же самое из умолчания -c человек не говорил, и ошибка была бы
 	// хамством: -c подгоняется, чтобы шапка не врала про пятьдесят потоков.
