@@ -163,6 +163,7 @@ func TestFileRefusals(t *testing.T) {
 		{"-f с -compare", []string{"-compare", "-f", yamlFile(t, "n: 1\n"), "a", "b"}, "-compare"},
 		// Файл ставит флаг через тот же Set, и «задан ли» его видит.
 		{"duration: 0s в файле", []string{"-f", yamlFile(t, "duration: 0s\n"), "http://x/"}, "-z"},
+		{"method: \"\" в файле", []string{"-f", yamlFile(t, "method: \"\"\n"), "http://x/"}, "метод"},
 		// YAML «.inf»/«.nan» через fmt.Sprint дают «+Inf»/«NaN» — тот же Set,
 		// то же правило.
 		{"rate: .inf в файле", []string{"-f", yamlFile(t, "rate: .inf\n"), "http://x/"}, "rate"},

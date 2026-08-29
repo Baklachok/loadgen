@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -99,15 +100,15 @@ func TestConfigCanonicalisesMethod(t *testing.T) {
 	}
 
 	// Приведение регистра не должно чинить то, что чинить нельзя: пробел
-	// внутри метода остаётся, и запрос обрывается до отправки — это
-	// проверяет TestInvalidMethodFailsBeforeAnyRequest в runner.
+	// внутри метода остаётся, Validate отвергает — и в ошибке стоит то,
+	// что человек написал (в верхнем регистре), а не что-то починенное.
 	t.Run("невалидный метод не чинится", func(t *testing.T) {
-		cfg, err := parseConfig(t, "-m", "PO ST", localURL)
-		if err != nil {
-			t.Fatalf("конфиг отвергнут раньше времени: %v", err)
+		_, err := parseConfig(t, "-m", "po st", localURL)
+		if err == nil {
+			t.Fatal("метод с пробелом принят")
 		}
-		if cfg.Method != "PO ST" {
-			t.Errorf("метод %q: приведение регистра подменило невалидный метод", cfg.Method)
+		if !strings.Contains(err.Error(), `"PO ST"`) {
+			t.Errorf("ошибка %q не называет метод как есть", err)
 		}
 	})
 }
@@ -176,6 +177,25 @@ func TestNumericFlagsRejectNonFinite(t *testing.T) {
 		t.Run("-rate "+good+" принимается", func(t *testing.T) {
 			if err := newFlags(io.Discard).parse([]string{"-rate", good, localURL}); err != nil {
 				t.Errorf("%q отвергнуто: %v", good, err)
+			}
+		})
+	}
+}
+
+// Метод проверял только http.NewRequest в фабрике — после того, как шапка
+// «Запуск N запросов…» обещала прогон. Отказ обязан быть до неё.
+func TestMalformedMethodRefusedBeforeHeader(t *testing.T) {
+	for _, m := range []string{"GET POST", "G(T", ""} {
+		t.Run(fmt.Sprintf("-m %q", m), func(t *testing.T) {
+			code, stdout, stderr := capture(t, "-m", m, "-n", "1", localURL)
+			if code != exitUsage {
+				t.Errorf("код %d, ожидался %d", code, exitUsage)
+			}
+			if strings.Contains(stdout, "Запуск") {
+				t.Errorf("шапка напечатана до отказа:\n%s", stdout)
+			}
+			if !strings.Contains(stderr, "метод") {
+				t.Errorf("причина не названа: %s", stderr)
 			}
 		})
 	}

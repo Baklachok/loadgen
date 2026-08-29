@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -60,6 +61,12 @@ func (c Config) Validate() error {
 // считая "localhost" схемой: без этой проверки прогон разваливался на N
 // одинаковых отказов с бесполезным "other" вместо одной строки на старте.
 func (c Config) validateTarget() error {
+	// Метод — token по RFC 7230; http.NewRequest проверит то же, но уже
+	// после шапки. Пустой Go молча превращает в GET — это не «не задано»,
+	// а ошибка: человек написал -m.
+	if !isToken(c.Method) {
+		return fmt.Errorf("метод %q — не HTTP-токен", c.Method)
+	}
 	if c.URL == "" {
 		return errors.New("URL не задан")
 	}
@@ -82,6 +89,25 @@ func (c Config) validateTarget() error {
 		return fmt.Errorf("в URL %q нет хоста", c.URL)
 	}
 	return nil
+}
+
+// tchar — символы token по RFC 7230 сверх букв и цифр.
+const tchar = "!#$%&'*+-.^_`|~"
+
+func isToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case strings.IndexByte(tchar, c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // validateWorkload — сколько работы и в сколько рук.

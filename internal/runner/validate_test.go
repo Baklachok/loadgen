@@ -31,6 +31,12 @@ func TestValidate(t *testing.T) {
 		{"верный конфиг", func(*Config) {}, ""},
 
 		{"URL не задан", func(c *Config) { c.URL = "" }, "URL не задан"},
+		// Метод проверял только http.NewRequest — после шапки. Пустой Go
+		// молча делает GET; PURGE нестандартный, но token — список запрещён.
+		{"метод с пробелом", func(c *Config) { c.Method = "GET POST" }, "HTTP-токен"},
+		{"метод со скобкой", func(c *Config) { c.Method = "G(T" }, "HTTP-токен"},
+		{"пустой метод", func(c *Config) { c.Method = "" }, "HTTP-токен"},
+		{"нестандартный метод", func(c *Config) { c.Method = "PURGE" }, ""},
 		{"URL без схемы", func(c *Config) { c.URL = "localhost/api" }, "без схемы"},
 		// url.Parse принимает это молча, считая "localhost" схемой:
 		// самый коварный случай, потому что похоже на рабочий адрес.
