@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -131,4 +132,23 @@ func TestSLOExitCodes(t *testing.T) {
 			t.Errorf("код %d без -slo-*, ожидался %d", code, exitOK)
 		}
 	})
+}
+
+// Метод проверял только http.NewRequest в фабрике — после того, как шапка
+// «Запуск N запросов…» обещала прогон. Отказ обязан быть до неё.
+func TestMalformedMethodRefusedBeforeHeader(t *testing.T) {
+	for _, m := range []string{"GET POST", "G(T", ""} {
+		t.Run(fmt.Sprintf("-m %q", m), func(t *testing.T) {
+			code, stdout, stderr := capture(t, "-m", m, "-n", "1", localURL)
+			if code != exitUsage {
+				t.Errorf("код %d, ожидался %d", code, exitUsage)
+			}
+			if strings.Contains(stdout, "Запуск") {
+				t.Errorf("шапка напечатана до отказа:\n%s", stdout)
+			}
+			if !strings.Contains(stderr, "метод") {
+				t.Errorf("причина не названа: %s", stderr)
+			}
+		})
+	}
 }

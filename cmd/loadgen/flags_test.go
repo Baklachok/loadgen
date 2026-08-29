@@ -1,11 +1,35 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/Baklachok/loadgen/internal/runner"
 )
+
+// accepts — конфиг из аргументов собран; URL подставляется сам.
+func accepts(t *testing.T, args ...string) runner.Config {
+	t.Helper()
+	cfg, err := parseConfig(t, append(args, localURL)...)
+	if err != nil {
+		t.Fatalf("%v отвергнуто: %v", args, err)
+	}
+	return cfg
+}
+
+// rejects — конфиг отвергнут, и ошибка называет want: флаг или значение,
+// которое человек написал, — иначе он не поймёт, что исправлять.
+func rejects(t *testing.T, want string, args ...string) {
+	t.Helper()
+	_, err := parseConfig(t, append(args, localURL)...)
+	if err == nil {
+		t.Fatalf("%v принято", args)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("%v: ошибка %q не называет %q", args, err, want)
+	}
+}
 
 // Правила, которые Validate увидеть не может: он смотрит на значения,
 // а «задан ли флаг» в значении не отражается.
@@ -13,58 +37,34 @@ func TestConfigRejectsContradictions(t *testing.T) {
 	// Тело с методом GET законно по HTTP, но человек, пишущий -d, имеет
 	// в виду POST. Промолчать здесь — дать ему не тот прогон.
 	t.Run("-d без -m", func(t *testing.T) {
-		if _, err := parseConfig(t, "-d", `{"a":1}`, localURL); err == nil {
-			t.Fatal("тело без -m принято: уйдёт методом GET")
-		}
-		if _, err := parseConfig(t, "-m", "POST", "-d", `{"a":1}`, localURL); err != nil {
-			t.Errorf("-m POST вместе с -d отвергнут: %v", err)
-		}
+		rejects(t, "-d", "-d", `{"a":1}`)
+		accepts(t, "-m", "POST", "-d", `{"a":1}`)
 	})
 
 	t.Run("-n вместе с -z", func(t *testing.T) {
-		if _, err := parseConfig(t, "-n", "200", "-z", "5s", localURL); err == nil {
-			t.Fatal("-n и -z приняты вместе")
-		}
+		rejects(t, "-z", "-n", "200", "-z", "5s")
 	})
 
 	// Для Validate нулевая длительность — «не задано»: «-z 0s» и «-z -1s»
 	// молча становились планом на 200 запросов. Ошибка обязана назвать -z,
 	// а не «duration» из недр runner.
 	t.Run("-z не больше нуля", func(t *testing.T) {
-		for _, z := range []string{"0s", "-1s"} {
-			_, err := parseConfig(t, "-z", z, localURL)
-			if err == nil {
-				t.Errorf("-z %s принят: прогон ушёл бы на -n 200", z)
-			} else if !strings.Contains(err.Error(), "-z") {
-				t.Errorf("-z %s: ошибка не называет флаг: %v", z, err)
-			}
-		}
-		if _, err := parseConfig(t, "-z", "1ms", localURL); err != nil {
-			t.Errorf("-z 1ms отвергнут: %v", err)
-		}
+		rejects(t, "-z", "-z", "0s")
+		rejects(t, "-z", "-z", "-1s")
+		accepts(t, "-z", "1ms")
 	})
 
 	// Явное «-c 50 -n 10» — противоречие, сказанное вслух, и отвергается.
 	// То же самое из умолчания -c человек не говорил, и ошибка была бы
 	// хамством: -c подгоняется, чтобы шапка не врала про пятьдесят потоков.
 	t.Run("-c больше -n", func(t *testing.T) {
-		if _, err := parseConfig(t, "-n", "10", "-c", "50", localURL); err == nil {
-			t.Fatal("явное -c больше -n принято")
-		}
-
-		cfg, err := parseConfig(t, "-n", "10", localURL)
-		if err != nil {
-			t.Fatalf("умолчание -c отвергнуто на -n 10: %v", err)
-		}
-		if cfg.Concurrency != 10 {
+		rejects(t, "потоков", "-n", "10", "-c", "50")
+		if cfg := accepts(t, "-n", "10"); cfg.Concurrency != 10 {
 			t.Errorf("потоков %d, ожидалось 10: шапка отчитается о том, чего не было", cfg.Concurrency)
 		}
-
 		// В open-loop -c это потолок запросов в полёте, и он обязан быть
 		// больше -n, иначе частоту не удержать.
-		if _, err := parseConfig(t, "-n", "10", "-c", "50", "-rate", "500", localURL); err != nil {
-			t.Errorf("open-loop с потолком выше -n отвергнут: %v", err)
-		}
+		accepts(t, "-n", "10", "-c", "50", "-rate", "500")
 	})
 }
 
@@ -73,7 +73,7 @@ func TestConfigRejectsContradictions(t *testing.T) {
 // Go отдаёт запрос хендлеру с любым методом, поэтому локально это выглядело
 // рабочим и ломалось на стенде.
 func TestConfigCanonicalisesMethod(t *testing.T) {
-	tests := []struct {
+	for _, tt := range []struct {
 		name string
 		args []string
 		want string
@@ -85,15 +85,9 @@ func TestConfigCanonicalisesMethod(t *testing.T) {
 		{"нестандартный", []string{"-m", "propfind"}, "PROPFIND"},
 		{"уже канонический не портится", []string{"-m", "DELETE"}, "DELETE"},
 		{"умолчание", nil, "GET"},
-	}
-
-	for _, tt := range tests {
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := parseConfig(t, append(tt.args, localURL)...)
-			if err != nil {
-				t.Fatalf("конфиг отвергнут: %v", err)
-			}
-			if cfg.Method != tt.want {
+			if cfg := accepts(t, tt.args...); cfg.Method != tt.want {
 				t.Errorf("метод %q, ожидался %q", cfg.Method, tt.want)
 			}
 		})
@@ -103,13 +97,7 @@ func TestConfigCanonicalisesMethod(t *testing.T) {
 	// внутри метода остаётся, Validate отвергает — и в ошибке стоит то,
 	// что человек написал (в верхнем регистре), а не что-то починенное.
 	t.Run("невалидный метод не чинится", func(t *testing.T) {
-		_, err := parseConfig(t, "-m", "po st", localURL)
-		if err == nil {
-			t.Fatal("метод с пробелом принят")
-		}
-		if !strings.Contains(err.Error(), `"PO ST"`) {
-			t.Errorf("ошибка %q не называет метод как есть", err)
-		}
+		rejects(t, `"PO ST"`, "-m", "po st")
 	})
 }
 
@@ -117,12 +105,7 @@ func TestConfigCanonicalisesMethod(t *testing.T) {
 // Go-http-client/1.1, и админ на той стороне не поймёт, что это и откуда.
 func TestConfigSignsRequests(t *testing.T) {
 	t.Run("по умолчанию — имя, версия и адрес репозитория", func(t *testing.T) {
-		cfg, err := parseConfig(t, localURL)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		ua := cfg.Headers.Get("User-Agent")
+		ua := accepts(t).Headers.Get("User-Agent")
 		if !strings.HasPrefix(ua, "loadgen/") {
 			t.Errorf("User-Agent = %q: подписи нет", ua)
 		}
@@ -137,37 +120,34 @@ func TestConfigSignsRequests(t *testing.T) {
 	// Сервис может ключеваться на User-Agent, и запретить его подменять
 	// значило бы сломать законный сценарий ради формальности.
 	t.Run("явный -H побеждает", func(t *testing.T) {
-		cfg, err := parseConfig(t, "-H", "User-Agent: custom/9", localURL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := cfg.Headers.Get("User-Agent"); got != "custom/9" {
+		if got := accepts(t, "-H", "User-Agent: custom/9").Headers.Get("User-Agent"); got != "custom/9" {
 			t.Errorf("User-Agent = %q, ожидался custom/9", got)
 		}
 	})
 
 	t.Run("другие заголовки подпись не отменяют", func(t *testing.T) {
-		cfg, err := parseConfig(t, "-H", "X-Token: secret", localURL)
-		if err != nil {
-			t.Fatal(err)
+		h := accepts(t, "-H", "X-Token: secret").Headers
+		if h.Get("X-Token") != "secret" {
+			t.Errorf("заголовок потерян: %v", h)
 		}
-		if cfg.Headers.Get("X-Token") != "secret" {
-			t.Errorf("заголовок потерян: %v", cfg.Headers)
-		}
-		if !strings.HasPrefix(cfg.Headers.Get("User-Agent"), "loadgen/") {
-			t.Errorf("подпись пропала при своём -H: %v", cfg.Headers)
+		if !strings.HasPrefix(h.Get("User-Agent"), "loadgen/") {
+			t.Errorf("подпись пропала при своём -H: %v", h)
 		}
 	})
 }
 
 // strconv.ParseFloat принимает «nan» и «inf» — а дальше NaN проходит любое
 // сравнение как ложь, и Inf делает расписание нулевым. Отвергаем на входе,
-// одним Value на все три числовых флага.
+// одним Value на все три числовых флага. Это ошибка Parse, а не config,
+// поэтому не через accepts/rejects.
 func TestNumericFlagsRejectNonFinite(t *testing.T) {
+	parse := func(args ...string) error {
+		return newFlags(io.Discard).parse(append(args, localURL))
+	}
 	for _, flagName := range []string{"-rate", "-slo-error-rate", "-regress-p99"} {
 		for _, bad := range []string{"nan", "NaN", "inf", "-Inf", "infinity", "1e400"} {
 			t.Run(flagName+" "+bad, func(t *testing.T) {
-				if err := newFlags(io.Discard).parse([]string{flagName, bad, localURL}); err == nil {
+				if err := parse(flagName, bad); err == nil {
 					t.Errorf("%s %s принято", flagName, bad)
 				}
 			})
@@ -175,27 +155,8 @@ func TestNumericFlagsRejectNonFinite(t *testing.T) {
 	}
 	for _, good := range []string{"0", "0.5", "1e9", "-0"} {
 		t.Run("-rate "+good+" принимается", func(t *testing.T) {
-			if err := newFlags(io.Discard).parse([]string{"-rate", good, localURL}); err != nil {
+			if err := parse("-rate", good); err != nil {
 				t.Errorf("%q отвергнуто: %v", good, err)
-			}
-		})
-	}
-}
-
-// Метод проверял только http.NewRequest в фабрике — после того, как шапка
-// «Запуск N запросов…» обещала прогон. Отказ обязан быть до неё.
-func TestMalformedMethodRefusedBeforeHeader(t *testing.T) {
-	for _, m := range []string{"GET POST", "G(T", ""} {
-		t.Run(fmt.Sprintf("-m %q", m), func(t *testing.T) {
-			code, stdout, stderr := capture(t, "-m", m, "-n", "1", localURL)
-			if code != exitUsage {
-				t.Errorf("код %d, ожидался %d", code, exitUsage)
-			}
-			if strings.Contains(stdout, "Запуск") {
-				t.Errorf("шапка напечатана до отказа:\n%s", stdout)
-			}
-			if !strings.Contains(stderr, "метод") {
-				t.Errorf("причина не названа: %s", stderr)
 			}
 		})
 	}
