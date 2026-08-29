@@ -72,8 +72,15 @@ func runLoad(f *flags, fs *flag.FlagSet, stdin, stdout, stderr *os.File) int {
 		return exitNoRun
 	}
 
+	// Всё, что живёт ровно столько, сколько прогон: /metrics поднят выше,
+	// до шапки; живая строка — после неё, чтобы не перерисовывать поверх.
+	// stop зовётся явно до Render — defer сработал бы после отчёта.
+	stopProgress := startProgress(ctx, stderr, cfg, acc)
+	defer stopProgress()
+
 	// Время меряет сам runner: он один знает, когда кончился прогрев.
 	rep, err := runner.Run(ctx, cfg, acc.Add)
+	stopProgress()
 	if err != nil {
 		fmt.Fprintln(stderr, "ошибка:", err)
 		return exitUsage

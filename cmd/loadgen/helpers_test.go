@@ -6,6 +6,8 @@ package main
 import (
 	"flag"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -125,4 +127,12 @@ func newTestFlags(t *testing.T) (*flag.FlagSet, *flags) {
 	fs := flag.NewFlagSet("loadgen", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	return fs, newFlags(fs, io.Discard)
+}
+
+// newTestServer — пустой 200 на всё; URL живёт, пока живёт тест.
+func newTestServer(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	t.Cleanup(srv.Close)
+	return srv.URL
 }
