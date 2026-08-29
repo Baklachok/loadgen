@@ -160,6 +160,10 @@ func TestFileRefusals(t *testing.T) {
 		{"битый YAML", []string{"-f", yamlFile(t, "n: [\n"), "http://x/"}, "-f"},
 		{"файла нет", []string{"-f", filepath.Join(t.TempDir(), "нет.yaml"), "http://x/"}, "-f"},
 		{"-f с -compare", []string{"-compare", "-f", yamlFile(t, "n: 1\n"), "a", "b"}, "-compare"},
+		// YAML «.inf»/«.nan» через fmt.Sprint дают «+Inf»/«NaN» — тот же Set,
+		// то же правило.
+		{"rate: .inf в файле", []string{"-f", yamlFile(t, "rate: .inf\n"), "http://x/"}, "rate"},
+		{"slo-error-rate: .nan в файле", []string{"-f", yamlFile(t, "slo-error-rate: .nan\n"), "http://x/"}, "slo-error-rate"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			code, _, stderr := capture(t, tt.args...)

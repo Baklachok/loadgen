@@ -5,6 +5,7 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"time"
@@ -104,6 +105,11 @@ func (c Config) validateWorkload() error {
 			c.Concurrency, c.Requests)
 	}
 
+	// Не дубль проверки в cmd: Validate — публичный вход runner, и Config
+	// может прийти не из флагов. NaN и Inf проходят через «< 0» молча.
+	if math.IsNaN(c.Rate) || math.IsInf(c.Rate, 0) {
+		return fmt.Errorf("rate должен быть числом, получено %v", c.Rate)
+	}
 	if c.Rate < 0 {
 		return fmt.Errorf("rate не может быть отрицательным, получено %v", c.Rate)
 	}

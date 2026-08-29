@@ -1,7 +1,6 @@
 // Флаги: собственные flag.Value, объявление набора и сборка конфигурации
-// прогона. Всё вместе намеренно: values.go жил отдельно один день и ни разу
-// не менялся без flags.go — правило разбора значения меняют вместе с флагом,
-// который его использует.
+// прогона. Правило разбора значения меняют вместе с флагом, который его
+// использует, — поэтому они в одном файле.
 package main
 
 import (
@@ -9,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,14 +18,33 @@ import (
 	"github.com/Baklachok/loadgen/internal/slo"
 )
 
+// finiteFlag — float64 без NaN и ±Inf: strconv.ParseFloat их принимает
+// («nan», «inf», «infinity» в любом регистре), а «-rate inf» уходило
+// в open-loop с расписанием в нулевой момент. Один Value на все числовые
+// флаги: через тот же Set их ставит и -f.
+type finiteFlag float64
+
+func (f *finiteFlag) String() string {
+	return strconv.FormatFloat(float64(*f), 'g', -1, 64)
+}
+
+func (f *finiteFlag) Set(s string) error {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return err
+	}
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("%q — не число", s)
+	}
+	*f = finiteFlag(v)
+	return nil
+}
+
 type headerFlag struct {
 	h http.Header
 }
 
 func (f *headerFlag) String() string {
-	if f.h == nil {
-		return ""
-	}
 	parts := make([]string, 0, len(f.h))
 	for k, vs := range f.h {
 		for _, v := range vs {
@@ -41,14 +60,10 @@ func (f *headerFlag) Set(value string) error {
 		return fmt.Errorf("заголовок должен быть в формате 'Key: Value', получено %q", value)
 	}
 	k = strings.TrimSpace(k)
-	v = strings.TrimSpace(v)
 	if k == "" {
 		return fmt.Errorf("пустое имя заголовка в %q", value)
 	}
-	if f.h == nil {
-		f.h = make(http.Header)
-	}
-	f.h.Add(k, v)
+	f.h.Add(k, strings.TrimSpace(v))
 	return nil
 }
 
@@ -92,7 +107,6 @@ type flags struct {
 	method      *string
 	body        *string
 	output      *string
-	rate        *float64
 	trace       *bool
 	insecure    *bool
 	noKeepAlive *bool
@@ -100,18 +114,18 @@ type flags struct {
 	yes         *bool
 	showVersion *bool
 
-	compare    *bool
-	regressP99 *float64
-	regressRPS *float64
-
+	compare *bool
 	metrics *string
 	file    *string
+	sloP99  *time.Duration
 
-	sloP99       *time.Duration
-	sloErrorRate *float64
-
-	headers headerFlag
-	warmup  warmupFlag
+	// Свои Value: лежат по значению, FlagSet пишет в них через указатель.
+	rate         finiteFlag
+	regressP99   finiteFlag
+	regressRPS   finiteFlag
+	sloErrorRate finiteFlag
+	headers      headerFlag
+	warmup       warmupFlag
 }
 
 func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
@@ -122,7 +136,6 @@ func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
 		method:      fs.String("m", "GET", "HTTP-метод"),
 		body:        fs.String("d", "", "тело запроса"),
 		timeout:     fs.Duration("t", 10*time.Second, "таймаут запроса"),
-		rate:        fs.Float64("rate", 0, "постоянный RPS, режим open-loop (0 — closed-loop)"),
 		output:      fs.String("o", "text", "формат вывода: text, json или prom"),
 		trace:       fs.Bool("trace", false, "разбить latency по фазам: DNS, TCP, TLS, TTFB"),
 		insecure:    fs.Bool("insecure", false, "не проверять TLS-сертификат"),
@@ -131,34 +144,38 @@ func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
 		yes:         fs.Bool("yes", false, "не спрашивать подтверждения для не-локальной цели"),
 		showVersion: fs.Bool("version", false, "показать версию"),
 
-		compare:    fs.Bool("compare", false, "сравнить два отчёта: loadgen -compare ДО ПОСЛЕ (файл или каталог)"),
-		metrics:    fs.String("metrics", "", "адрес для /metrics на время прогона, например :9090 (по умолчанию выключено)"),
-		file:       fs.String("f", "", "прогон из YAML-файла; флаги в строке перекрывают файл"),
-		regressP99: fs.Float64("regress-p99", 0, "при сравнении: насколько процентов p99 позволено вырасти, иначе код 3"),
-		regressRPS: fs.Float64("regress-rps", 0, "при сравнении: насколько процентов RPS позволено упасть, иначе код 3"),
+		compare: fs.Bool("compare", false, "сравнить два отчёта: loadgen -compare ДО ПОСЛЕ (файл или каталог)"),
+		metrics: fs.String("metrics", "", "адрес для /metrics на время прогона, например :9090 (по умолчанию выключено)"),
+		file:    fs.String("f", "", "прогон из YAML-файла; флаги в строке перекрывают файл"),
+		sloP99:  fs.Duration("slo-p99", 0, "порог приёмки: p99 не выше указанного, иначе код 3"),
 
-		sloP99:       fs.Duration("slo-p99", 0, "порог приёмки: p99 не выше указанного, иначе код 3"),
-		sloErrorRate: fs.Float64("slo-error-rate", 0, "порог приёмки: доля не-2xx в процентах, иначе код 3"),
+		headers: headerFlag{h: make(http.Header)},
 	}
+	fs.Var(&f.rate, "rate", "постоянный RPS, режим open-loop (0 — closed-loop)")
+	fs.Var(&f.regressP99, "regress-p99", "при сравнении: насколько процентов p99 позволено вырасти, иначе код 3")
+	fs.Var(&f.regressRPS, "regress-rps", "при сравнении: насколько процентов RPS позволено упасть, иначе код 3")
+	fs.Var(&f.sloErrorRate, "slo-error-rate", "порог приёмки: доля не-2xx в процентах, иначе код 3")
 	fs.Var(&f.headers, "H", "заголовок в формате 'Key: Value' (можно несколько раз)")
 	fs.Var(&f.warmup, "warmup", "прогрев: длительность (5s) или число запросов (100), в статистику не идёт")
 
-	fs.Usage = func() {
-		fmt.Fprintf(stderr, "loadgen — нагрузочный тестер HTTP\n\n")
-		fmt.Fprintf(stderr, "Использование:\n  loadgen [флаги] URL\n\nФлаги:\n")
-		fs.PrintDefaults()
-
-		fmt.Fprintf(stderr, "\nПримеры:\n")
-		for _, ex := range []string{
-			"loadgen -n 1000 -c 50 http://localhost:8080",
-			"loadgen -z 30s -rate 500 -c 200 http://localhost:8080   # open-loop",
-			"loadgen -n 1000 -o json http://localhost:8080 | jq .latency.p99_ms",
-			`loadgen -m POST -d '{"a":1}' -H 'Content-Type: application/json' http://localhost:8080/api`,
-		} {
-			fmt.Fprintf(stderr, "  %s\n", ex)
-		}
-	}
+	fs.Usage = func() { printUsage(fs, stderr) }
 	return f
+}
+
+func printUsage(fs *flag.FlagSet, w io.Writer) {
+	fmt.Fprintf(w, "loadgen — нагрузочный тестер HTTP\n\n")
+	fmt.Fprintf(w, "Использование:\n  loadgen [флаги] URL\n\nФлаги:\n")
+	fs.PrintDefaults()
+
+	fmt.Fprintf(w, "\nПримеры:\n")
+	for _, ex := range []string{
+		"loadgen -n 1000 -c 50 http://localhost:8080",
+		"loadgen -z 30s -rate 500 -c 200 http://localhost:8080   # open-loop",
+		"loadgen -n 1000 -o json http://localhost:8080 | jq .latency.p99_ms",
+		`loadgen -m POST -d '{"a":1}' -H 'Content-Type: application/json' http://localhost:8080/api`,
+	} {
+		fmt.Fprintf(w, "  %s\n", ex)
+	}
 }
 
 // setFlags — имена флагов, заданных в командной строке. Нужен там, где
@@ -212,9 +229,6 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 	// законный сценарий ради формальности.
 	headers := f.headers.h
 	if headers.Get("User-Agent") == "" {
-		if headers == nil {
-			headers = make(http.Header)
-		}
 		headers.Set("User-Agent", userAgent())
 	}
 
@@ -222,7 +236,7 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 	// о пятидесяти потоках, из которых работали десять. Явное -c не трогаем —
 	// там человек сказал противоречие вслух, и Validate ответит ошибкой.
 	concurrency := *f.c
-	if !set["c"] && *f.rate == 0 && requests > 0 && concurrency > requests {
+	if !set["c"] && f.rate == 0 && requests > 0 && concurrency > requests {
 		concurrency = requests
 	}
 
@@ -235,7 +249,7 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 		Duration:         *f.z,
 		Concurrency:      concurrency,
 		Timeout:          *f.timeout,
-		Rate:             *f.rate,
+		Rate:             float64(f.rate),
 		Trace:            *f.trace,
 		WarmupRequests:   f.warmup.requests,
 		WarmupDuration:   f.warmup.duration,
@@ -252,7 +266,7 @@ func (f *flags) config(fs *flag.FlagSet) (runner.Config, error) {
 func (f *flags) slo(fs *flag.FlagSet) slo.Thresholds {
 	out := slo.Thresholds{P99: *f.sloP99, ErrorRate: -1}
 	if setFlags(fs)["slo-error-rate"] {
-		out.ErrorRate = *f.sloErrorRate / 100
+		out.ErrorRate = float64(f.sloErrorRate) / 100
 	}
 	return out
 }

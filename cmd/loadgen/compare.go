@@ -47,7 +47,7 @@ func runCompare(f *flags, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	res, err := compare.Compare(before, after, compare.Thresholds{P99: *f.regressP99, RPS: *f.regressRPS})
+	res, err := compare.Compare(before, after, compare.Thresholds{P99: float64(f.regressP99), RPS: float64(f.regressRPS)})
 	if err != nil {
 		fmt.Fprintln(stderr, "ошибка:", err)
 		return exitUsage

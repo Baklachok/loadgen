@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +61,10 @@ func TestValidate(t *testing.T) {
 
 		{"таймаут ноль", func(c *Config) { c.Timeout = 0 }, "timeout"},
 		{"отрицательная частота", func(c *Config) { c.Rate = -1 }, "отрицательн"},
+		// Граница пакета: Config может прийти не из флагов, и «< 0» NaN/Inf
+		// не ловит.
+		{"частота NaN", func(c *Config) { c.Rate = math.NaN() }, "числом"},
+		{"частота Inf", func(c *Config) { c.Rate = math.Inf(1) }, "числом"},
 	}
 
 	for _, tt := range cases {
