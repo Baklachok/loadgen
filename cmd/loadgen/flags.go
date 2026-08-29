@@ -35,6 +35,8 @@ type flags struct {
 	regressP99 *float64
 	regressRPS *float64
 
+	metrics *string
+
 	sloP99       *time.Duration
 	sloErrorRate *float64
 
@@ -51,7 +53,7 @@ func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
 		body:        fs.String("d", "", "тело запроса"),
 		timeout:     fs.Duration("t", 10*time.Second, "таймаут запроса"),
 		rate:        fs.Float64("rate", 0, "постоянный RPS, режим open-loop (0 — closed-loop)"),
-		output:      fs.String("o", "text", "формат вывода: text или json"),
+		output:      fs.String("o", "text", "формат вывода: text, json или prom"),
 		trace:       fs.Bool("trace", false, "разбить latency по фазам: DNS, TCP, TLS, TTFB"),
 		insecure:    fs.Bool("insecure", false, "не проверять TLS-сертификат"),
 		noKeepAlive: fs.Bool("disable-keepalive", false, "новое соединение на каждый запрос"),
@@ -60,6 +62,7 @@ func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
 		showVersion: fs.Bool("version", false, "показать версию"),
 
 		compare:    fs.Bool("compare", false, "сравнить два отчёта: loadgen -compare ДО ПОСЛЕ (файл или каталог)"),
+		metrics:    fs.String("metrics", "", "адрес для /metrics на время прогона, например :9090 (по умолчанию выключено)"),
 		regressP99: fs.Float64("regress-p99", 0, "при сравнении: насколько процентов p99 позволено вырасти, иначе код 3"),
 		regressRPS: fs.Float64("regress-rps", 0, "при сравнении: насколько процентов RPS позволено упасть, иначе код 3"),
 

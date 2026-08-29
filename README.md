@@ -57,7 +57,7 @@ loadgen -m POST -d '{"a":1}' -H 'Content-Type: application/json' http://localhos
 | `-d` | — | тело запроса |
 | `-H` | — | заголовок `'Key: Value'`, можно несколько раз |
 | `-t` | 10s | таймаут запроса |
-| `-o` | text | формат вывода: `text` или `json` |
+| `-o` | text | формат вывода: `text`, `json` или `prom` |
 | `-warmup` | — | прогрев: длительность (`5s`) или число запросов (`100`), в статистику не идёт |
 | `-trace` | false | разбить latency по фазам: DNS, TCP, TLS, TTFB |
 | `-insecure` | false | не проверять TLS-сертификат |
@@ -69,6 +69,7 @@ loadgen -m POST -d '{"a":1}' -H 'Content-Type: application/json' http://localhos
 | `-compare` | false | сравнить два отчёта вместо прогона: `-compare ДО ПОСЛЕ` |
 | `-regress-p99` | — | при сравнении: на сколько процентов p99 позволено вырасти |
 | `-regress-rps` | — | при сравнении: на сколько процентов RPS позволено упасть |
+| `-metrics` | — | адрес `/metrics` на время прогона, например `:9090` |
 | `-version` | | показать версию |
 
 ### Коды выхода
@@ -123,6 +124,20 @@ loadgen -compare -regress-p99 10 runs/{before,after}  # +10% к p99 → код 3
 с кодом 1, если у отчётов разная `schema`, расходится `config` (URL, метод,
 `-n`/`-z`, `-c`, `-rate`) или хоть один прогон прерван. Пороги `-regress-p99`
 и `-regress-rps` задаются в процентах и дают код 3 — тот же, что у `-slo-*`.
+
+### Prometheus
+
+Отчёт печатается в конце, и `-z 30m` — тридцать минут тишины. `-metrics :9090`
+открывает `/metrics` на время прогона; `-o prom` печатает то же один раз —
+для Pushgateway или textfile-collector.
+
+```yaml
+scrape_configs:
+  - { job_name: loadgen, scrape_interval: 1s, static_configs: [{ targets: ['127.0.0.1:9090'] }] }
+```
+
+Недостоверный перцентиль не печатается, как `null` в JSON. `loadgen_rps` —
+только по итогу; по ходу прогона частота это `rate(loadgen_requests_total[1m])`.
 
 ## Ответственное использование
 

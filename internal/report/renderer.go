@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/Baklachok/loadgen/internal/prom"
+
 	"github.com/Baklachok/loadgen/internal/stats"
 )
 
@@ -28,8 +30,10 @@ func NewRenderer(format string) (Renderer, error) {
 		return textRenderer{}, nil
 	case "json":
 		return jsonRenderer{}, nil
+	case "prom":
+		return promRenderer{}, nil
 	}
-	return nil, fmt.Errorf("неизвестный формат вывода %q, доступны text и json", format)
+	return nil, fmt.Errorf("неизвестный формат вывода %q, доступны text, json и prom", format)
 }
 
 type textRenderer struct{}
@@ -53,4 +57,15 @@ func (jsonRenderer) Header(io.Writer, Options) error { return nil }
 
 func (jsonRenderer) Render(w io.Writer, s stats.Summary, opt Options) error {
 	return writeJSON(w, s, opt)
+}
+
+// promRenderer — текстовый формат экспозиции Prometheus, для Pushgateway
+// или textfile-collector. Header пустой по той же причине, что у JSON:
+// на stdout обязан оказаться только документ.
+type promRenderer struct{}
+
+func (promRenderer) Header(io.Writer, Options) error { return nil }
+
+func (promRenderer) Render(w io.Writer, s stats.Summary, _ Options) error {
+	return prom.Write(w, s)
 }

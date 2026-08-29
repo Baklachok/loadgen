@@ -50,15 +50,27 @@ func runLoad(f *flags, fs *flag.FlagSet, stdin, stdout, stderr *os.File) int {
 	ctx, stop := interruptible(stderr, os.Exit)
 	defer stop()
 
+	// Накопитель заводится до прогона: результаты в нём и оседают, а сам
+	// прогон их не хранит — на длинном -z это сотни мегабайт.
+	acc := stats.NewAccumulator(cfg.Rate)
+
+	// /metrics поднимается до шапки и гаснет после последнего запроса: занятый
+	// порт — ошибка запуска, и «Прогон 3s на …» не должен её опережать.
+	if *f.metrics != "" {
+		m, err := listenMetrics(*f.metrics, acc)
+		if err != nil {
+			fmt.Fprintln(stderr, "ошибка:", err)
+			return exitUsage
+		}
+		defer m.Close()
+		fmt.Fprintf(stderr, "метрики: http://%s/metrics\n", m.Addr())
+	}
+
 	// Печатать ли шапку, решает сам рендерер: в машинных форматах её нет.
 	if err := renderer.Header(stdout, opt); err != nil {
 		fmt.Fprintln(stderr, "ошибка вывода:", err)
 		return exitNoRun
 	}
-
-	// Накопитель заводится до прогона: результаты в нём и оседают, а сам
-	// прогон их не хранит — на длинном -z это сотни мегабайт.
-	acc := stats.NewAccumulator(cfg.Rate)
 
 	// Время меряет сам runner: он один знает, когда кончился прогрев.
 	rep, err := runner.Run(ctx, cfg, acc.Add)

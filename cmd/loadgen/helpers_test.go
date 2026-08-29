@@ -30,22 +30,51 @@ const localURL = "http://localhost:8080/"
 func capture(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 
+	l := launch(t, args...)
+	return <-l.code, <-l.stdout, <-l.stderr
+}
+
+// launched — идущий run: код и потоки приходят по каналам, когда он кончится,
+// а stderrLive можно читать по ходу — так тест /metrics узнаёт порт.
+type launched struct {
+	code           <-chan int
+	stdout, stderr <-chan string
+	stderrLive     *os.File
+}
+
+// launch запускает run в горутине с трубами вместо потоков. Раньше каждый
+// тест, которому нужен был идущий прогон, собирал те же три трубы руками.
+func launch(t *testing.T, args ...string) launched {
+	t.Helper()
+
 	outR, outW := pipe(t)
 	errR, errW := pipe(t)
-
-	// По каналу на поток: общий не даёт понять, чья строка пришла первой.
-	outDone, errDone := drain(outR), drain(errR)
 
 	// stdin — труба, а не терминал: спрашивать в тестах некого, и это ровно
 	// та ветка, что работает в CI.
 	inR, inW := pipe(t)
 	inW.Close()
 
-	code = run(args, inR, outW, errW)
-	outW.Close()
-	errW.Close()
+	// По каналу на поток: общий не даёт понять, чья строка пришла первой.
+	// stderr раздваивается: liveR читают по ходу, teeR собирают целиком.
+	// pipe отдаёт (r, w) — первая версия перепутала концы и писала
+	// в read-конец: тройник молча терял всё, и адрес /metrics не приходил.
+	liveR, liveW := pipe(t)
+	teeR, teeW := pipe(t)
+	outDone, errDone := drain(outR), drain(teeR)
+	go func() {
+		io.Copy(io.MultiWriter(teeW, liveW), errR) //nolint:errcheck // тестовая труба
+		teeW.Close()
+		liveW.Close()
+	}()
 
-	return code, <-outDone, <-errDone
+	code := make(chan int, 1)
+	go func() {
+		code <- run(args, inR, outW, errW)
+		outW.Close()
+		errW.Close()
+	}()
+	return launched{code: code, stdout: outDone, stderr: errDone, stderrLive: liveR}
 }
 
 // pipe, а не bytes.Buffer: run принимает *os.File именно затем, чтобы

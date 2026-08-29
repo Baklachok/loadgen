@@ -1,0 +1,48 @@
+# HELP loadgen_requests_total Запросы по исходу.
+# TYPE loadgen_requests_total counter
+loadgen_requests_total{outcome="ok"} 90
+loadgen_requests_total{outcome="non_2xx"} 8
+loadgen_requests_total{outcome="failed"} 2
+loadgen_requests_total{outcome="truncated"} 0
+# HELP loadgen_client_errors_total Отказы из-за исчерпания ресурсов самого генератора.
+# TYPE loadgen_client_errors_total counter
+loadgen_client_errors_total 1
+# HELP loadgen_late_total Запросы, ушедшие позже расписания больше чем на слот.
+# TYPE loadgen_late_total counter
+loadgen_late_total 7
+# HELP loadgen_latency_seconds Время запроса.
+# TYPE loadgen_latency_seconds summary
+loadgen_latency_seconds{quantile="0.5"} 0.004
+loadgen_latency_seconds{quantile="0.9"} 0.009
+loadgen_latency_seconds{quantile="0.95"} 0.03
+loadgen_latency_seconds{quantile="0.99"} 0.08
+loadgen_latency_seconds_sum 10
+loadgen_latency_seconds_count 2000
+# HELP loadgen_corrected_latency_seconds Время запроса с поправкой на расписание.
+# TYPE loadgen_corrected_latency_seconds summary
+loadgen_corrected_latency_seconds{quantile="0.5"} 0.005
+loadgen_corrected_latency_seconds{quantile="0.9"} 0.04
+loadgen_corrected_latency_seconds{quantile="0.95"} 0.07
+loadgen_corrected_latency_seconds{quantile="0.99"} 0.11
+loadgen_corrected_latency_seconds_sum 18
+loadgen_corrected_latency_seconds_count 2000
+# HELP loadgen_target_rate Заданная частота open-loop.
+# TYPE loadgen_target_rate gauge
+loadgen_target_rate 50
+# HELP loadgen_rps Полученных ответов в секунду за окно измерения; только по итогу прогона.
+# TYPE loadgen_rps gauge
+loadgen_rps 49
+# HELP loadgen_bytes_read_total Прочитано байт тел ответов.
+# TYPE loadgen_bytes_read_total counter
+loadgen_bytes_read_total 4096
+# HELP loadgen_responses Ответы по HTTP-коду.
+# TYPE loadgen_responses counter
+loadgen_responses{code="200"} 90
+loadgen_responses{code="404"} 5
+loadgen_responses{code="503"} 3
+# HELP loadgen_errors Отказы по причине.
+# TYPE loadgen_errors counter
+loadgen_errors{kind="timeout"} 2
+# HELP loadgen_partial 1, если прогон прерван и цифры собраны не по всему плану.
+# TYPE loadgen_partial gauge
+loadgen_partial 0

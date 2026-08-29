@@ -19,6 +19,14 @@ func runCompare(f *flags, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 	}
 	// Молча игнорировать заданный формат нельзя, а машинного потребителя
 	// у сравнения пока нет.
+	if *f.metrics != "" {
+		fmt.Fprintln(stderr, "ошибка: -metrics открывает окно в идущий прогон, а -compare прогона не делает")
+		return exitUsage
+	}
+	if *f.metrics != "" {
+		fmt.Fprintln(stderr, "ошибка: -metrics открывает окно в идущий прогон, а -compare прогона не делает")
+		return exitUsage
+	}
 	if *f.output != "text" {
 		fmt.Fprintf(stderr, "ошибка: -compare печатает текстом, -o %s к нему не применяется\n", *f.output)
 		return exitUsage
