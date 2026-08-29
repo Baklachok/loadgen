@@ -31,6 +31,10 @@ type flags struct {
 	yes         *bool
 	showVersion *bool
 
+	compare    *bool
+	regressP99 *float64
+	regressRPS *float64
+
 	sloP99       *time.Duration
 	sloErrorRate *float64
 
@@ -54,6 +58,10 @@ func newFlags(fs *flag.FlagSet, stderr io.Writer) *flags {
 		http2:       fs.Bool("http2", false, "разрешить HTTP/2"),
 		yes:         fs.Bool("yes", false, "не спрашивать подтверждения для не-локальной цели"),
 		showVersion: fs.Bool("version", false, "показать версию"),
+
+		compare:    fs.Bool("compare", false, "сравнить два отчёта: loadgen -compare ДО ПОСЛЕ (файл или каталог)"),
+		regressP99: fs.Float64("regress-p99", 0, "при сравнении: насколько процентов p99 позволено вырасти, иначе код 3"),
+		regressRPS: fs.Float64("regress-rps", 0, "при сравнении: насколько процентов RPS позволено упасть, иначе код 3"),
 
 		sloP99:       fs.Duration("slo-p99", 0, "порог приёмки: p99 не выше указанного, иначе код 3"),
 		sloErrorRate: fs.Float64("slo-error-rate", 0, "порог приёмки: доля не-2xx в процентах, иначе код 3"),
