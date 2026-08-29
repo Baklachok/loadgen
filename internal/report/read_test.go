@@ -1,6 +1,7 @@
 package report
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +22,8 @@ func TestReadSummary(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if s.Schema != schemaVersion {
-			t.Errorf("schema = %d, ожидалось %d", s.Schema, schemaVersion)
+		if s.Schema != SchemaVersion {
+			t.Errorf("schema = %d, ожидалось %d", s.Schema, SchemaVersion)
 		}
 		if s.Setup.URL == "" || s.Setup.Concurrency == 0 {
 			t.Errorf("config не доехал: %+v", s.Setup)
@@ -38,7 +39,7 @@ func TestReadSummary(t *testing.T) {
 	// Ради этого схема и заводилась: между версиями 1 и 2 у failed сменился
 	// смысл, и сравнение таких отчётов сопоставляло бы разные величины.
 	t.Run("чужая схема отвергается", func(t *testing.T) {
-		alien := strings.Replace(string(raw), `"schema": 2`, `"schema": 99`, 1)
+		alien := strings.Replace(string(raw), fmt.Sprintf(`"schema": %d`, SchemaVersion), `"schema": 99`, 1)
 		if !strings.Contains(alien, `"schema": 99`) {
 			t.Fatal("подмена схемы не удалась — проверьте формат golden-файла")
 		}

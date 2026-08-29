@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Baklachok/loadgen/internal/report"
 )
 
 // report кладёт на диск отчёт схемы 2 с заданным p99.
@@ -13,7 +15,7 @@ func reportFile(t *testing.T, dir, name string, p99 float64) string {
 	t.Helper()
 
 	path := filepath.Join(dir, name)
-	body := `{"schema":2,"partial":false,
+	body := `{"schema":` + strconv.Itoa(report.SchemaVersion) + `,"partial":false,
 	  "config":{"url":"http://localhost:8080/","method":"GET","requests":1000,
 	            "duration_ms":0,"concurrency":20,"rate":0},
 	  "rps":1000,"success_rate":1,"throughput_mb_s":1,

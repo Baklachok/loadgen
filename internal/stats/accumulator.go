@@ -31,7 +31,7 @@ func isOK(code int) bool { return code >= 200 && code < 300 }
 // по коду.
 type Accumulator struct {
 	sum                Summary
-	service, corrected samples
+	service, corrected distribution
 
 	// period — сколько времени расписание отводит на один запрос, то есть
 	// порог опоздания. При 2000 RPS это 500мкс, при 10 RPS — 100мс.
@@ -50,7 +50,9 @@ func NewAccumulator(rate float64) *Accumulator {
 			Codes:  make(map[int]int),
 			Errors: make(map[ErrorKind]int),
 		},
-		period: schedulePeriod(rate),
+		service:   newDistribution(),
+		corrected: newDistribution(),
+		period:    schedulePeriod(rate),
 	}
 }
 
@@ -147,7 +149,7 @@ func (a *Accumulator) Summary(rep runner.Report) Summary {
 
 	if s.Responses() > 0 {
 		s.Latency = a.service.latencies()
-		s.Histogram = histogram(a.service.sorted(), histogramBuckets)
+		s.Histogram = a.service.histogram(histogramBuckets)
 
 		// Без расписания поправлять нечего: Lag был нулём у каждого запроса.
 		s.Corrected = s.Latency

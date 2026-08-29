@@ -38,7 +38,7 @@ func TestComputeTrace(t *testing.T) {
 			t.Errorf("Connect.Count = %d, ожидался 1: три запроса не соединялись вовсе", s.Trace.Connect.Samples)
 		}
 		// Если бы нули учитывались, среднее было бы 1.5мс вместо 6мс
-		if s.Trace.Connect.Mean != ms(6) {
+		if !near(s.Trace.Connect.Mean, ms(6)) {
 			t.Errorf("Connect.Mean = %v, ожидалось 6ms", s.Trace.Connect.Mean)
 		}
 		if s.Trace.TTFB.Samples != 4 {
@@ -79,7 +79,7 @@ func TestComputeTraceExcludesWarmup(t *testing.T) {
 	if s.Trace.Connect.Samples != 0 {
 		t.Errorf("Connect.Count = %d, ожидался 0: рукопожатие сделал прогрев", s.Trace.Connect.Samples)
 	}
-	if s.Trace.TTFB.P50 != ms(4) {
+	if !near(s.Trace.TTFB.P50, ms(4)) {
 		t.Errorf("TTFB p50 = %v, ожидалось 4ms", s.Trace.TTFB.P50)
 	}
 }

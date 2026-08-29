@@ -297,11 +297,11 @@ func TestJSONSchemaVersion(t *testing.T) {
 	}
 	raw := decodeJSON(t, sample(), Options{}, &got)
 
-	if got.Schema != schemaVersion {
-		t.Errorf("schema = %d, ожидалось %d", got.Schema, schemaVersion)
+	if got.Schema != SchemaVersion {
+		t.Errorf("schema = %d, ожидалось %d", got.Schema, SchemaVersion)
 	}
-	if schemaVersion < 1 {
-		t.Errorf("schemaVersion = %d: версия начинается с единицы", schemaVersion)
+	if SchemaVersion < 1 {
+		t.Errorf("SchemaVersion = %d: версия начинается с единицы", SchemaVersion)
 	}
 
 	// Первым полем — чтобы версию было видно, не разбирая документ целиком

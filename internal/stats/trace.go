@@ -30,18 +30,25 @@ type TraceSummary struct {
 // отбрасываются. Ноль здесь означает, что фазы не было вовсе, и в
 // перцентилях ему делать нечего.
 type phaseAcc struct {
-	samples
+	d distribution
 }
 
 func (a *phaseAcc) add(d time.Duration) {
 	if d <= 0 {
 		return
 	}
-	a.samples.add(d)
+	if a.d == nil {
+		a.d = newDistribution()
+	}
+	a.d.add(d)
 }
 
+// stats на пустой фазе отдаёт нули — «замеров не было», как и раньше.
 func (a *phaseAcc) stats() PhaseStats {
-	return a.latencies()
+	if a.d == nil {
+		return PhaseStats{}
+	}
+	return a.d.latencies()
 }
 
 // traceAcc копит фазы соединения по всем запросам. Отдельный тип, а не шесть

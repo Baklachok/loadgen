@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Baklachok/loadgen/internal/report"
 )
 
 // doc — минимальный отчёт схемы 2. Пишем сырым JSON, а не через report:
@@ -16,7 +18,7 @@ func doc(t *testing.T, dir, name string, edit func(map[string]any)) string {
 	t.Helper()
 
 	m := map[string]any{
-		"schema":  2,
+		"schema":  report.SchemaVersion,
 		"partial": false,
 		"config": map[string]any{
 			"url": "http://localhost:8080/", "method": "GET",

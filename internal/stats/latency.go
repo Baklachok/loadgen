@@ -58,8 +58,25 @@ func (l Latencies) Reliable(p float64) bool {
 	return l.Samples >= MinSamples(p)
 }
 
-// samples копит замеры для перцентилей. Сумму держим рядом, чтобы среднее
-// не считать вторым проходом по миллионам значений.
+// distribution — накопитель замеров, который умеет отдать перцентили
+// и гистограмму. Это шов, о котором говорил хендофф: реализаций две —
+// точная samples и HDR с фиксированной памятью, — и замена одной на другую
+// не должна трогать ничего, кроме конструктора в Accumulator.
+//
+// Гистограмма считается внутри накопителя намеренно. Раньше Accumulator
+// доставал сырой отсортированный слайс и строил её сам — а у HDR никакого
+// слайса нет, и ровно эта строка расползлась бы при замене.
+type distribution interface {
+	add(time.Duration)
+	latencies() Latencies
+	histogram(n int) []Bucket
+}
+
+// samples копит замеры для перцентилей — точно, без округления. Сумму держим
+// рядом, чтобы среднее не считать вторым проходом по миллионам значений.
+//
+// Остаётся в коде рядом с HDR как эталон: по ней меряется его погрешность,
+// и на ней держатся тесты перцентилей и гистограммы.
 type samples struct {
 	values []time.Duration
 	total  time.Duration
@@ -96,6 +113,11 @@ func (s *samples) latencies() Latencies {
 	}
 }
 
+// histogram — распределение по n равным бакетам.
+func (s *samples) histogram(n int) []Bucket {
+	return histogram(s.sorted(), n)
+}
+
 // Percentile ожидает отсортированный слайс.
 func Percentile(sorted []time.Duration, p float64) time.Duration {
 	if len(sorted) == 0 {
@@ -125,13 +147,27 @@ type Bucket struct {
 // бакетам. Шкала линейная: на длинном хвосте это даёт пустоту между горбами,
 // но именно она и показывает, что распределение не одно, а два.
 func histogram(sorted []time.Duration, n int) []Bucket {
-	if len(sorted) == 0 || n < 1 {
+	if len(sorted) == 0 {
 		return nil
 	}
+	return bucketize(sorted[0], sorted[len(sorted)-1], n, func(place func(time.Duration, int)) {
+		for _, d := range sorted {
+			place(d, 1)
+		}
+	})
+}
 
-	lo, hi := sorted[0], sorted[len(sorted)-1]
+// bucketize — каркас гистограммы, общий для точного и HDR-накопителя:
+// n равных бакетов от lo до hi, а точки в них кладёт вызывающий через place.
+// Раньше каркас был выписан дважды и отличался только этим циклом.
+func bucketize(lo, hi time.Duration, n int, feed func(place func(v time.Duration, count int))) []Bucket {
+	if n < 1 {
+		return nil
+	}
 	if lo == hi {
-		return []Bucket{{Upper: hi, Count: len(sorted)}}
+		total := 0
+		feed(func(_ time.Duration, c int) { total += c })
+		return []Bucket{{Upper: hi, Count: total}}
 	}
 
 	width := float64(hi-lo) / float64(n)
@@ -141,12 +177,14 @@ func histogram(sorted []time.Duration, n int) []Bucket {
 	}
 	buckets[n-1].Upper = hi // накопленное округление не должно отсечь максимум
 
+	// Точки идут по возрастанию у обоих источников, поэтому курсор b только
+	// растёт; точка выше hi (бар HDR шириной в бакет) прижимается к последнему.
 	b := 0
-	for _, d := range sorted {
-		for b < n-1 && d > buckets[b].Upper {
+	feed(func(v time.Duration, count int) {
+		for b < n-1 && v > buckets[b].Upper {
 			b++
 		}
-		buckets[b].Count++
-	}
+		buckets[b].Count += count
+	})
 	return buckets
 }

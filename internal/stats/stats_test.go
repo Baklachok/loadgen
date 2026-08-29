@@ -33,7 +33,7 @@ func TestComputeFillsSummary(t *testing.T) {
 	if s.RPS != 1.5 {
 		t.Errorf("RPS = %v, ожидалось 1.5", s.RPS)
 	}
-	if s.Latency.Mean != ms(20) {
+	if !near(s.Latency.Mean, ms(20)) {
 		t.Errorf("Mean = %v, ожидалось 20ms", s.Latency.Mean)
 	}
 	if s.Codes[200] != 2 || s.Codes[500] != 1 {
@@ -181,7 +181,7 @@ func TestComputeOutcomes(t *testing.T) {
 			t.Errorf("RPS = %v, ожидалось 100: отказ тоже обслуженный запрос", s.RPS)
 		}
 		// Латентность отказов осмысленна: показывает, как быстро сервис отшивает
-		if s.Latency.P50 != ms(2) {
+		if !near(s.Latency.P50, ms(2)) {
 			t.Errorf("p50 = %v, ожидалось 2ms", s.Latency.P50)
 		}
 	})
@@ -208,7 +208,7 @@ func TestComputeOutcomes(t *testing.T) {
 		if s.NonOK != 1 || s.Failed != 1 {
 			t.Errorf("NonOK=%d Failed=%d, ожидалось по единице", s.NonOK, s.Failed)
 		}
-		if s.Latency.Max != ms(2) {
+		if !near(s.Latency.Max, ms(2)) {
 			t.Errorf("max = %v: таймаут просочился в перцентили и утопил их", s.Latency.Max)
 		}
 	})
@@ -300,7 +300,7 @@ func TestComputeExcludesWarmup(t *testing.T) {
 		t.Errorf("OK=%d NonOK=%d, ожидалось 2 и 1", s.OK, s.NonOK)
 	}
 	// Ради этого всё и затевалось: медленный прогрев не должен тянуть хвост
-	if s.Latency.Max != ms(30) {
+	if !near(s.Latency.Max, ms(30)) {
 		t.Errorf("max = %v, ожидалось 30ms: прогрев просочился в перцентили", s.Latency.Max)
 	}
 	if s.RPS != 3 {
@@ -454,10 +454,10 @@ func TestComputeSchedule(t *testing.T) {
 				Elapsed: time.Second, Window: time.Second, TargetRate: 100,
 			})
 
-			if s.Latency.P50 != ms(10) {
+			if !near(s.Latency.P50, ms(10)) {
 				t.Errorf("Latency.p50 = %v, ожидалось 10ms: в замер запроса опоздание не входит", s.Latency.P50)
 			}
-			if s.Corrected.P50 != ms(50) {
+			if !near(s.Corrected.P50, ms(50)) {
 				t.Errorf("Corrected.p50 = %v, ожидалось 50ms: это то, что почувствовал бы клиент по часам", s.Corrected.P50)
 			}
 		})

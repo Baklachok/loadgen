@@ -61,3 +61,13 @@ func repeat(n int, r runner.Result) []runner.Result {
 	}
 	return out
 }
+
+// near — равенство с допуском в hdrTolerance: перцентили и среднее идут
+// через HDR, и точного равенства от них ждать нельзя по устройству.
+func near(got, want time.Duration) bool {
+	d := got - want
+	if d < 0 {
+		d = -d
+	}
+	return float64(d) <= float64(want)*hdrTolerance
+}

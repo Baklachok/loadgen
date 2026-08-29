@@ -65,8 +65,8 @@ func ReadSummary(r io.Reader) (RunSummary, error) {
 	if err := json.NewDecoder(r).Decode(&s); err != nil {
 		return RunSummary{}, fmt.Errorf("не разобрать отчёт: %w", err)
 	}
-	if s.Schema != schemaVersion {
-		return RunSummary{}, fmt.Errorf("схема %d, а понимаем %d: отчёт снят другой версией", s.Schema, schemaVersion)
+	if s.Schema != SchemaVersion {
+		return RunSummary{}, fmt.Errorf("схема %d, а понимаем %d: отчёт снят другой версией", s.Schema, SchemaVersion)
 	}
 	return s, nil
 }

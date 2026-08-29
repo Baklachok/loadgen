@@ -14,7 +14,8 @@ import (
 // сериализуется наносекундами-числом, что нечитаемо, а форма контракта не
 // должна меняться каждый раз, когда внутри stats переименовали поле.
 
-// schemaVersion — версия контракта JSON-вывода.
+// SchemaVersion — версия контракта JSON-вывода. Экспортирована ради тестов
+// соседних пакетов: литерал «2» в трёх из них протух на первом же бампе.
 //
 // Бампается, когда поле убрано, переименовано, сменило тип или смысл —
 // то есть когда чужой парсер сломается. Добавление поля версию не меняет:
@@ -28,12 +29,17 @@ import (
 // История версий — по строке на бамп, чтобы потребитель понимал, что для него
 // изменилось, не читая коммиты:
 //
+//	3 — перцентили считаются по HDR-гистограмме с тремя значащими цифрами.
+//	    Поля те же, смысл другой: p*_ms были реальными замерами, стали
+//	    верхними границами бакетов шириной 0.1%. min/max/mean по-прежнему
+//	    точные. Сравнивать отчёты через эту границу нельзя — -compare
+//	    это и отвергнет, для того схема и есть.
 //	2 — появился исход truncated, и failed сузился: оборванные ответы больше
 //	    в него не входят. Гейт по failed перестанет их ловить, если не добавить
 //	    truncated. Само поле truncated — добавление и версию бы не двигало;
 //	    двигает её смена смысла у failed.
 //	1 — первая зафиксированная форма.
-const schemaVersion = 2
+const SchemaVersion = 3
 
 type jsonSummary struct {
 	Schema int        `json:"schema"`
@@ -163,24 +169,26 @@ func ms(d time.Duration) float64 {
 	return math.Round(float64(d)/float64(time.Microsecond)) / 1000
 }
 
-func latenciesJSON(l stats.Latencies) jsonLatencies {
-	// percentile отдаёт nil, когда замеров не хватило на осмысленное число.
-	percentile := func(d time.Duration, q float64) *float64 {
-		if !l.Reliable(q) {
-			return nil
-		}
-		v := ms(d)
-		return &v
+// reliable отдаёт nil, когда замеров не хватило на осмысленный перцентиль:
+// число здесь было бы такой же ложью, как в текстовом отчёте, только
+// потребитель у него автоматический и переспросить не может.
+func reliable(l stats.Latencies, d time.Duration, q float64) *float64 {
+	if !l.Reliable(q) {
+		return nil
 	}
+	v := ms(d)
+	return &v
+}
 
+func latenciesJSON(l stats.Latencies) jsonLatencies {
 	return jsonLatencies{
 		Samples: l.Samples,
 		MinMs:   ms(l.Min),
 		MeanMs:  ms(l.Mean),
-		P50Ms:   percentile(l.P50, 0.50),
-		P90Ms:   percentile(l.P90, 0.90),
-		P95Ms:   percentile(l.P95, 0.95),
-		P99Ms:   percentile(l.P99, 0.99),
+		P50Ms:   reliable(l, l.P50, 0.50),
+		P90Ms:   reliable(l, l.P90, 0.90),
+		P95Ms:   reliable(l, l.P95, 0.95),
+		P99Ms:   reliable(l, l.P99, 0.99),
 		MaxMs:   ms(l.Max),
 	}
 }
@@ -205,7 +213,7 @@ func writeJSON(w io.Writer, s stats.Summary, opt Options) error {
 
 func summaryJSON(s stats.Summary, opt Options) jsonSummary {
 	out := jsonSummary{
-		Schema: schemaVersion,
+		Schema: SchemaVersion,
 		Config: configJSON(opt.Run),
 
 		Total:   s.Total,
