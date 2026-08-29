@@ -208,7 +208,9 @@ loadgen -z 5s -c 1600 -warmup 1s http://127.0.0.1:18099/
 только на больших выборках.
 
 **Loopback — не сеть.** На `127.0.0.1` нет потерь, RTT микросекунды. Цифры
-с localhost на прод не переносятся, и насколько — локальный прогон не скажет.
+с localhost на прод не переносятся. Насколько — покажет `make smoke-rtt`:
+под RTT 42 мс те же `-c 50` дают не 26 000 RPS, а 1 100 — потолок closed-loop
+это `c / RTT`, и 0.5% потерь рисуют второй горб на 280 мс (ретрансмиты).
 
 **Один прогон — анекдот.** Три прогона, медиана. Если p99 гуляет вдвое, сначала
 стабилизируйте окружение, потом делайте выводы о коде.
@@ -244,6 +246,8 @@ internal/prom/    метрики в формате Prometheus — для /metric
 make build    # bin/loadgen с версией из git describe
 make test     # go test -race ./...
 make smoke    # собранный бинарник против заглушки: числа и коды выхода
+make smoke-net # через настоящую сеть: DNS, TLS, HTTP/2, ошибки; не в CI
+make smoke-rtt # под RTT через tc netem: Lag, потолок по Литтлу; sudo, не в CI
 make lint     # golangci-lint: govet, staticcheck, gosec, bodyclose, gofmt
 make demo     # перезаписать assets/demo.gif (нужны asciinema и agg)
 make cross    # dist/: linux, darwin, windows — amd64 и arm64

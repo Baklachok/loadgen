@@ -13,7 +13,7 @@ os   = $(word 1,$(subst /, ,$1))
 arch = $(word 2,$(subst /, ,$1))
 ext  = $(if $(findstring windows,$1),.exe)
 
-.PHONY: build test smoke lint fmt demo cross clean $(PLATFORMS)
+.PHONY: build test smoke smoke-net smoke-rtt lint fmt demo cross clean $(PLATFORMS)
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/loadgen
@@ -25,6 +25,16 @@ test:
 # не видят: что сборка даёт работающую программу с верными кодами выхода.
 smoke:
 	./scripts/smoke.sh
+
+# Через настоящую сеть — DNS, TLS, HTTP/2, классификация ошибок. Не в CI:
+# цели чужие, недоступная цель это SKIP, а не красный пайплайн.
+smoke-net:
+	./scripts/smoke-net.sh
+
+# Под RTT через tc netem на loopback: Lag, потолок по Литтлу, ретрансмиты.
+# Требует sudo, замедляет loopback машины на время прогона. Не в CI.
+smoke-rtt:
+	./scripts/smoke-rtt.sh
 
 lint:
 	@command -v golangci-lint >/dev/null || { \
