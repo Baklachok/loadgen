@@ -31,16 +31,25 @@ func runCompare(f *flags, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	// Для compare ноль — «порог не задан», и отрицательный туда же: гейт
-	// молча выключен. До чтения файлов: отказ по флагу от файлов не зависит.
-	for _, thr := range []struct {
+	// Порог стоит, только если назван: для compare nil — «не задан», а явный
+	// ноль — ни на процент. Отрицательный — ошибка, и до чтения файлов:
+	// отказ по флагу от файлов не зависит.
+	set := f.named()
+	var thr compare.Thresholds
+	for _, g := range []struct {
 		name string
 		v    finiteFlag
-	}{{"-regress-p99", f.regressP99}, {"-regress-rps", f.regressRPS}} {
-		if thr.v < 0 {
-			fmt.Fprintf(stderr, "ошибка: %s — насколько позволено ухудшиться, отрицательным не бывает; получено %v\n", thr.name, float64(thr.v))
+		dst  **float64
+	}{{"regress-p99", f.regressP99, &thr.P99}, {"regress-rps", f.regressRPS, &thr.RPS}} {
+		if !set[g.name] {
+			continue
+		}
+		if g.v < 0 {
+			fmt.Fprintf(stderr, "ошибка: -%s — насколько позволено ухудшиться, отрицательным не бывает; получено %v\n", g.name, float64(g.v))
 			return exitUsage
 		}
+		limit := float64(g.v)
+		*g.dst = &limit
 	}
 
 	before, err := compare.Load(f.fs.Arg(0))
@@ -54,7 +63,7 @@ func runCompare(f *flags, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	res, err := compare.Compare(before, after, compare.Thresholds{P99: float64(f.regressP99), RPS: float64(f.regressRPS)})
+	res, err := compare.Compare(before, after, thr)
 	if err != nil {
 		fmt.Fprintln(stderr, "ошибка:", err)
 		return exitUsage

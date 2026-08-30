@@ -12,21 +12,23 @@ package compare
 import "fmt"
 
 // Thresholds — насколько метрике позволено ухудшиться, в процентах.
-// Ноль означает «порог не задан»: без него сравнение остаётся отчётом
-// и кода выхода не меняет.
+// nil — «порог не задан»: сравнение остаётся отчётом и кода выхода не
+// меняет. Явный ноль — ни на процент; отличить его от «не задано» может
+// только тот, кто разбирал флаги, поэтому поле — указатель, а не число
+// с sentinel: нулевое значение структуры остаётся «без порогов».
 type Thresholds struct {
-	P99 float64
-	RPS float64
+	P99 *float64
+	RPS *float64
 }
 
-func (t Thresholds) forGate(gate string) float64 {
+func (t Thresholds) forGate(gate string) *float64 {
 	switch gate {
 	case "p99":
 		return t.P99
 	case "rps":
 		return t.RPS
 	}
-	return 0
+	return nil
 }
 
 // Row — одна метрика в таблице сравнения.
@@ -69,7 +71,7 @@ func Compare(before, after Side, thr Thresholds) (Result, error) {
 	return res, nil
 }
 
-func compareMetric(m metric, before, after Side, limit float64) Row {
+func compareMetric(m metric, before, after Side, limit *float64) Row {
 	b, a := before.values[m.label], after.values[m.label]
 
 	row := Row{Label: m.label, Before: noData, After: noData, Change: noData}
@@ -100,9 +102,9 @@ func compareMetric(m metric, before, after Side, limit float64) Row {
 	if m.better == higher {
 		worse = -delta
 	}
-	if limit > 0 && worse > limit {
+	if limit != nil && worse > *limit {
 		row.Regressed = true
-		row.Change += fmt.Sprintf(" — хуже порога в %.0f%%", limit)
+		row.Change += fmt.Sprintf(" — хуже порога в %.0f%%", *limit)
 	}
 	return row
 }

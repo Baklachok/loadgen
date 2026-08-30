@@ -10,15 +10,15 @@ import (
 	"github.com/Baklachok/loadgen/internal/report"
 )
 
-// report кладёт на диск отчёт схемы 2 с заданным p99.
-func reportFile(t *testing.T, dir, name string, p99 float64) string {
+// reportFile кладёт на диск отчёт текущей схемы с заданными p99 и RPS.
+func reportFile(t *testing.T, dir, name string, p99, rps float64) string {
 	t.Helper()
 
 	path := filepath.Join(dir, name)
 	body := `{"schema":` + strconv.Itoa(report.SchemaVersion) + `,"partial":false,
 	  "config":{"url":"http://localhost:8080/","method":"GET","requests":1000,
 	            "duration_ms":0,"concurrency":20,"rate":0},
-	  "rps":1000,"success_rate":1,"throughput_mb_s":1,
+	  "rps":` + fmtFloat(rps) + `,"success_rate":1,"throughput_mb_s":1,
 	  "non_2xx":0,"failed":0,"truncated":0,
 	  "latency":{"p50_ms":5,"p90_ms":9,"p95_ms":10,"p99_ms":` + fmtFloat(p99) + `}}`
 
@@ -36,8 +36,9 @@ func fmtFloat(v float64) string {
 // подчиняется тому же контракту, что у -slo-*.
 func TestCompareMode(t *testing.T) {
 	dir := t.TempDir()
-	before := reportFile(t, dir, "before.json", 20)
-	after := reportFile(t, dir, "after.json", 40) // +100%
+	before := reportFile(t, dir, "before.json", 20, 1000)
+	after := reportFile(t, dir, "after.json", 40, 900) // p99 +100%, RPS −10%
+	same := reportFile(t, dir, "same.json", 20, 1000)
 
 	t.Run("без порога — отчёт и код 0", func(t *testing.T) {
 		code, stdout, _ := capture(t, "-compare", before, after)
@@ -64,6 +65,30 @@ func TestCompareMode(t *testing.T) {
 	t.Run("порог не превышен — код 0", func(t *testing.T) {
 		code, _, _ := capture(t, "-compare", "-regress-p99", "500", before, after)
 		if code != exitOK {
+			t.Errorf("код %d, ожидался %d", code, exitOK)
+		}
+	})
+
+	// RPS — вторая проводка, со своим направлением: хуже — когда меньше.
+	t.Run("-regress-rps: падение выше порога — код 3", func(t *testing.T) {
+		if code, _, _ := capture(t, "-compare", "-regress-rps", "5", before, after); code != exitSLO {
+			t.Errorf("код %d, ожидался %d", code, exitSLO)
+		}
+	})
+	t.Run("-regress-rps: в пределах — код 0", func(t *testing.T) {
+		if code, _, _ := capture(t, "-compare", "-regress-rps", "50", before, after); code != exitOK {
+			t.Errorf("код %d, ожидался %d", code, exitOK)
+		}
+	})
+
+	// Явный ноль — ни на процент, а не «порога нет».
+	t.Run("явный 0: любое ухудшение — код 3", func(t *testing.T) {
+		if code, _, _ := capture(t, "-compare", "-regress-p99", "0", before, after); code != exitSLO {
+			t.Errorf("код %d, ожидался %d", code, exitSLO)
+		}
+	})
+	t.Run("явный 0: без изменений — код 0", func(t *testing.T) {
+		if code, _, _ := capture(t, "-compare", "-regress-p99", "0", "-regress-rps", "0", before, same); code != exitOK {
 			t.Errorf("код %d, ожидался %d", code, exitOK)
 		}
 	})

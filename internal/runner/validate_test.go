@@ -2,6 +2,7 @@ package runner
 
 import (
 	"math"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,13 @@ func TestValidate(t *testing.T) {
 		{"метод со скобкой", func(c *Config) { c.Method = "G(T" }, "HTTP-токен"},
 		{"пустой метод", func(c *Config) { c.Method = "" }, "HTTP-токен"},
 		{"нестандартный метод", func(c *Config) { c.Method = "PURGE" }, ""},
+		// Go проверяет заголовки в Transport.Do — после шапки; CR/LF уезжали
+		// в статистику как «other». HTAB и obs-text (байты ≥ 0x80) законны.
+		{"CRLF в значении заголовка", func(c *Config) { c.Headers = http.Header{"X-A": {"1\r\nX-B: 2"}} }, "управляющий"},
+		{"CR в имени заголовка", func(c *Config) { c.Headers = http.Header{"X\r-A": {"1"}} }, "токен"},
+		{"TAB в значении заголовка", func(c *Config) { c.Headers = http.Header{"X-A": {"a\tb"}} }, ""},
+		{"UTF-8 в значении заголовка", func(c *Config) { c.Headers = http.Header{"X-A": {"ёж"}} }, ""},
+		{"пустое значение заголовка", func(c *Config) { c.Headers = http.Header{"X-A": {""}} }, ""},
 		{"URL без схемы", func(c *Config) { c.URL = "localhost/api" }, "без схемы"},
 		// url.Parse принимает это молча, считая "localhost" схемой:
 		// самый коварный случай, потому что похоже на рабочий адрес.

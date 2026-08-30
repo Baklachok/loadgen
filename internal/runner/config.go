@@ -47,6 +47,9 @@ func (c Config) Validate() error {
 	if err := c.validateTarget(); err != nil {
 		return err
 	}
+	if err := c.validateHeaders(); err != nil {
+		return err
+	}
 	if err := c.validateWorkload(); err != nil {
 		return err
 	}
@@ -104,6 +107,33 @@ func isToken(s string) bool {
 		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
 		case strings.IndexByte(tchar, c) >= 0:
 		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validateHeaders — имя это token, значение без управляющих символов
+// (RFC 7230). Go проверяет то же в Transport.Do — после шапки и на каждом
+// запросе: CR/LF в -H доезжали до статистики как «other», rc=2.
+func (c Config) validateHeaders() error {
+	for name, values := range c.Headers {
+		if !isToken(name) {
+			return fmt.Errorf("заголовок %q: имя — не HTTP-токен", name)
+		}
+		for _, v := range values {
+			if !validFieldValue(v) {
+				return fmt.Errorf("заголовок %q: значение содержит управляющий символ", name)
+			}
+		}
+	}
+	return nil
+}
+
+// validFieldValue — VCHAR, SP, HTAB и obs-text; управляющие и DEL — нет.
+func validFieldValue(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 && c != '\t' || c == 0x7f {
 			return false
 		}
 	}

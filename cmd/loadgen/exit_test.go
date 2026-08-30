@@ -135,19 +135,28 @@ func TestSLOExitCodes(t *testing.T) {
 	})
 }
 
-// Метод проверял только http.NewRequest в фабрике — после того, как шапка
-// «Запуск N запросов…» обещала прогон. Отказ обязан быть до неё.
-func TestMalformedMethodRefusedBeforeHeader(t *testing.T) {
-	for _, m := range []string{"GET POST", "G(T", ""} {
-		t.Run(fmt.Sprintf("-m %q", m), func(t *testing.T) {
-			code, stdout, stderr := capture(t, "-m", m, "-n", "1", localURL)
+// Метод и заголовки Go проверял сам — метод в фабрике, заголовки в Do, —
+// оба после того, как шапка «Запуск N запросов…» обещала прогон. Отказ
+// обязан быть до неё, и stderr обязан назвать причину.
+func TestUsageErrorRefusedBeforeHeader(t *testing.T) {
+	for _, tt := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-m", "GET POST"}, "метод"},
+		{[]string{"-m", "G(T"}, "метод"},
+		{[]string{"-m", ""}, "метод"},
+		{[]string{"-H", "X-A: 1\r\nX-B: 2"}, "X-A"},
+	} {
+		t.Run(fmt.Sprintf("%q", tt.args), func(t *testing.T) {
+			code, stdout, stderr := capture(t, append(tt.args, "-n", "1", localURL)...)
 			if code != exitUsage {
 				t.Errorf("код %d, ожидался %d", code, exitUsage)
 			}
 			if strings.Contains(stdout, "Запуск") {
 				t.Errorf("шапка напечатана до отказа:\n%s", stdout)
 			}
-			if !strings.Contains(stderr, "метод") {
+			if !strings.Contains(stderr, tt.want) {
 				t.Errorf("причина не названа: %s", stderr)
 			}
 		})

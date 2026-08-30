@@ -168,6 +168,7 @@ func TestFileRefusals(t *testing.T) {
 		{"пустой список для скаляра", []string{"-f", yamlFile(t, "requests: []\n"), "http://x/"}, "список"},
 		{"таблица вместо тела", []string{"-f", yamlFile(t, "body: {a: 1}\n"), "http://x/"}, "таблица"},
 		{"таблица вместо заголовков", []string{"-f", yamlFile(t, "headers: {X: 1}\n"), "http://x/"}, "таблица"},
+		{"CRLF в заголовке из файла", []string{"-f", yamlFile(t, "headers: [\"X-A: 1\\r\\nX-B: 2\"]\n"), "http://x/"}, "X-A"},
 		// Файл ставит флаг через тот же Set, и «задан ли» его видит.
 		{"duration: 0s в файле", []string{"-f", yamlFile(t, "duration: 0s\n"), "http://x/"}, "-z"},
 		{"method: \"\" в файле", []string{"-f", yamlFile(t, "method: \"\"\n"), "http://x/"}, "метод"},

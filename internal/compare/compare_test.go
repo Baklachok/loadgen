@@ -11,9 +11,10 @@ import (
 	"github.com/Baklachok/loadgen/internal/report"
 )
 
-// doc — минимальный отчёт схемы 2. Пишем сырым JSON, а не через report:
-// сравниватель обязан читать то, что лежит на диске, а не то, что мы
-// умеем собрать в памяти.
+// doc — минимальный отчёт текущей схемы. Пишем сырым JSON, а не через
+// report: сравниватель обязан читать то, что лежит на диске, а не то,
+// что мы умеем собрать в памяти. Числа в config целые — подмена поля
+// в TestCompareRefusesMismatch на это опирается.
 func doc(t *testing.T, dir, name string, edit func(map[string]any)) string {
 	t.Helper()
 
@@ -46,6 +47,41 @@ func doc(t *testing.T, dir, name string, edit func(map[string]any)) string {
 func latency(m map[string]any) map[string]any { return m["latency"].(map[string]any) }
 func config(m map[string]any) map[string]any  { return m["config"].(map[string]any) }
 
+// load — одна сторона из одного отчёта; ошибка загрузки здесь не предмет
+// теста, а помеха.
+func load(t *testing.T, edit func(map[string]any)) Side {
+	t.Helper()
+	side, err := Load(doc(t, t.TempDir(), "r.json", edit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return side
+}
+
+// compare — сравнение, которое обязано состояться; отказ проверяет
+// TestCompareRefusesMismatch.
+func compare(t *testing.T, before, after Side, thr Thresholds) Result {
+	t.Helper()
+	res, err := Compare(before, after, thr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func row(t *testing.T, res Result, label string) Row {
+	t.Helper()
+	for _, r := range res.Rows {
+		if r.Label == label {
+			return r
+		}
+	}
+	t.Fatalf("в таблице нет строки %q", label)
+	return Row{}
+}
+
+func pct(v float64) *float64 { return &v }
+
 func TestLoad(t *testing.T) {
 	t.Run("каталог даёт медиану", func(t *testing.T) {
 		dir := t.TempDir()
@@ -68,11 +104,7 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("один файл — один прогон", func(t *testing.T) {
-		side, err := Load(doc(t, t.TempDir(), "one.json", nil))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if side.Runs != 1 {
+		if side := load(t, nil); side.Runs != 1 {
 			t.Errorf("прогонов %d, ожидался 1", side.Runs)
 		}
 	})
@@ -124,29 +156,21 @@ func TestLoad(t *testing.T) {
 func TestCompareRefusesMismatch(t *testing.T) {
 	for _, field := range []string{"url", "method", "requests", "duration_ms", "concurrency", "rate"} {
 		t.Run(field, func(t *testing.T) {
-			before, err := Load(doc(t, t.TempDir(), "b.json", nil))
-			if err != nil {
-				t.Fatal(err)
-			}
-			after, err := Load(doc(t, t.TempDir(), "a.json", func(m map[string]any) {
+			before := load(t, nil)
+			after := load(t, func(m map[string]any) {
 				switch v := config(m)[field].(type) {
 				case string:
 					config(m)[field] = v + "-другое"
 				case int:
 					config(m)[field] = v + 1
-				case float64:
-					config(m)[field] = v + 1
 				}
-			}))
-			if err != nil {
-				t.Fatal(err)
-			}
+			})
 
-			_, err = Compare(before, after, Thresholds{})
+			_, err := Compare(before, after, Thresholds{})
 			if err == nil {
-				t.Errorf("%s разошёлся, а сравнение состоялось", field)
+				t.Fatalf("%s разошёлся, а сравнение состоялось", field)
 			}
-			if err != nil && !strings.Contains(err.Error(), field) {
+			if !strings.Contains(err.Error(), field) {
 				t.Errorf("ошибка не называет поле: %v", err)
 			}
 		})
@@ -154,98 +178,65 @@ func TestCompareRefusesMismatch(t *testing.T) {
 }
 
 func TestCompare(t *testing.T) {
-	load := func(t *testing.T, edit func(map[string]any)) Side {
-		t.Helper()
-		side, err := Load(doc(t, t.TempDir(), "r.json", edit))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return side
-	}
-
-	row := func(res Result, label string) Row {
-		for _, r := range res.Rows {
-			if r.Label == label {
-				return r
-			}
-		}
-		return Row{}
-	}
-
 	t.Run("порог не задан — регрессии нет ни при какой дельте", func(t *testing.T) {
-		before := load(t, nil)
 		after := load(t, func(m map[string]any) { latency(m)["p99_ms"] = 200.0 })
 
-		res, err := Compare(before, after, Thresholds{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		res := compare(t, load(t, nil), after, Thresholds{})
 		if res.Regressed() {
 			t.Error("без порога сравнение обязано оставаться отчётом")
 		}
-		if got := row(res, "p99").Change; !strings.Contains(got, "+900") {
+		if got := row(t, res, "p99").Change; !strings.Contains(got, "+900") {
 			t.Errorf("изменение p99 = %q, ожидалось +900%%", got)
 		}
 	})
 
+	// Явный ноль — ни на процент: названный ноль не должен молча значить
+	// «порога нет», как и -slo-error-rate 0.
+	t.Run("явный ноль ловит любое ухудшение", func(t *testing.T) {
+		after := load(t, func(m map[string]any) { latency(m)["p99_ms"] = 20.2 }) // +1%
+
+		if !row(t, compare(t, load(t, nil), after, Thresholds{P99: pct(0)}), "p99").Regressed {
+			t.Error("рост p99 на 1% при нулевом пороге не признан регрессией")
+		}
+		if compare(t, load(t, nil), load(t, nil), Thresholds{P99: pct(0)}).Regressed() {
+			t.Error("без изменений нулевой порог сработал")
+		}
+	})
+
 	t.Run("порог сработал", func(t *testing.T) {
-		before := load(t, nil)
 		after := load(t, func(m map[string]any) { latency(m)["p99_ms"] = 30.0 }) // +50%
 
-		res, err := Compare(before, after, Thresholds{P99: 10})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !res.Regressed() || !row(res, "p99").Regressed {
+		res := compare(t, load(t, nil), after, Thresholds{P99: pct(10)})
+		if !res.Regressed() || !row(t, res, "p99").Regressed {
 			t.Error("рост p99 на 50% при пороге 10% не признан регрессией")
 		}
 	})
 
 	t.Run("улучшение регрессией не считается", func(t *testing.T) {
-		before := load(t, nil)
 		after := load(t, func(m map[string]any) { latency(m)["p99_ms"] = 5.0 })
 
-		res, err := Compare(before, after, Thresholds{P99: 10})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if res.Regressed() {
+		if compare(t, load(t, nil), after, Thresholds{P99: pct(10)}).Regressed() {
 			t.Error("падение p99 засчитано за регрессию")
 		}
 	})
 
 	// RPS считается в другую сторону: хуже — когда меньше.
 	t.Run("направление у RPS обратное", func(t *testing.T) {
-		before := load(t, nil)
 		slower := load(t, func(m map[string]any) { m["rps"] = 500.0 })
+		faster := load(t, func(m map[string]any) { m["rps"] = 2000.0 })
 
-		res, err := Compare(before, slower, Thresholds{RPS: 10})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !row(res, "RPS").Regressed {
+		if !row(t, compare(t, load(t, nil), slower, Thresholds{RPS: pct(10)}), "RPS").Regressed {
 			t.Error("падение RPS вдвое не признано регрессией")
 		}
-
-		faster := load(t, func(m map[string]any) { m["rps"] = 2000.0 })
-		res, err = Compare(before, faster, Thresholds{RPS: 10})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if res.Regressed() {
+		if compare(t, load(t, nil), faster, Thresholds{RPS: pct(10)}).Regressed() {
 			t.Error("рост RPS засчитан за регрессию")
 		}
 	})
 
 	t.Run("недостоверный перцентиль — прочерк, а не ноль", func(t *testing.T) {
 		before := load(t, func(m map[string]any) { latency(m)["p99_ms"] = nil })
-		after := load(t, nil)
 
-		res, err := Compare(before, after, Thresholds{P99: 10})
-		if err != nil {
-			t.Fatal(err)
-		}
-		r := row(res, "p99")
+		r := row(t, compare(t, before, load(t, nil), Thresholds{P99: pct(10)}), "p99")
 		if r.Before != noData || r.Change != noData {
 			t.Errorf("p99 без данных показан как %q → %q (%s)", r.Before, r.After, r.Change)
 		}
@@ -257,13 +248,8 @@ func TestCompare(t *testing.T) {
 	// По двум одиночным прогонам разницу в проценты интерпретировать нельзя,
 	// и умолчать об этом значит выдать анекдот за измерение.
 	t.Run("одиночные прогоны названы анекдотом", func(t *testing.T) {
-		res, err := Compare(load(t, nil), load(t, nil), Thresholds{})
-		if err != nil {
-			t.Fatal(err)
-		}
-
 		var b bytes.Buffer
-		res.Write(&b)
+		compare(t, load(t, nil), load(t, nil), Thresholds{}).Write(&b)
 		if !strings.Contains(b.String(), "анекдот") {
 			t.Errorf("оговорки про одиночный прогон нет:\n%s", b.String())
 		}
