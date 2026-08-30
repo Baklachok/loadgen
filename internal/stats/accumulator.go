@@ -13,11 +13,13 @@ import (
 )
 
 // schedulePeriod — сколько времени отведено расписанием на один запрос.
+// Не меньше наносекунды: выше 1e9 RPS деление округляется в ноль, и
+// «расписание есть» превращалось бы в «нет» — поправка молча исчезала.
 func schedulePeriod(rate float64) time.Duration {
 	if rate <= 0 {
 		return 0
 	}
-	return time.Duration(float64(time.Second) / rate)
+	return max(time.Nanosecond, time.Duration(float64(time.Second)/rate))
 }
 
 // isOK: успех — это 2xx. 3xx сюда не входит осознанно — редиректы мы не

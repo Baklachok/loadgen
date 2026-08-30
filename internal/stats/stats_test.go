@@ -565,3 +565,18 @@ func TestPercentiles(t *testing.T) {
 		}
 	})
 }
+
+// Выше 1e9 RPS период расписания округлялся в ноль, и накопитель решал,
+// что расписания нет: поправка и счётчик опоздавших молча исчезали.
+func TestCorrectionSurvivesHugeRate(t *testing.T) {
+	r := resp(200, ms(1))
+	r.Lag = time.Second
+	s := computeReport([]runner.Result{r}, runner.Report{TargetRate: 1e10, Elapsed: time.Second, Window: time.Second})
+
+	if !near(s.Corrected.Max, time.Second+ms(1)) {
+		t.Errorf("Corrected.Max = %v, ожидалось ~1.001s: поправка потеряна", s.Corrected.Max)
+	}
+	if s.Late != 1 {
+		t.Errorf("Late = %d, ожидалось 1", s.Late)
+	}
+}

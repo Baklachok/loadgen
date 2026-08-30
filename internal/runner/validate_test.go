@@ -75,11 +75,14 @@ func TestValidate(t *testing.T) {
 		}, ""},
 
 		{"таймаут ноль", func(c *Config) { c.Timeout = 0 }, "timeout"},
-		{"отрицательная частота", func(c *Config) { c.Rate = -1 }, "отрицательн"},
+		{"отрицательная частота", func(c *Config) { c.Rate = -1 }, "от 0 до"},
 		// Граница пакета: Config может прийти не из флагов, и «< 0» NaN/Inf
 		// не ловит.
-		{"частота NaN", func(c *Config) { c.Rate = math.NaN() }, "числом"},
-		{"частота Inf", func(c *Config) { c.Rate = math.Inf(1) }, "числом"},
+		{"частота NaN", func(c *Config) { c.Rate = math.NaN() }, "от 0 до"},
+		{"частота Inf", func(c *Config) { c.Rate = math.Inf(1) }, "от 0 до"},
+		// Плотнее запроса в наносекунду расписание непредставимо.
+		{"частота на пределе", func(c *Config) { c.Rate = 1e9 }, ""},
+		{"частота выше предела", func(c *Config) { c.Rate = 2e9 }, "от 0 до"},
 	}
 
 	for _, tt := range cases {

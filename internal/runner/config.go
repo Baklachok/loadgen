@@ -5,10 +5,8 @@ package runner
 import (
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -21,7 +19,7 @@ type Config struct {
 	Duration    time.Duration // режим -z, взаимоисключающе с Requests
 	Concurrency int
 	Timeout     time.Duration
-	Rate        float64 // >0 — open-loop с постоянной частотой; 0 — closed-loop
+	Rate        float64 // >0 — open-loop с постоянной частотой, не выше maxRate; 0 — closed-loop
 	Trace       bool    // собирать разбивку latency по фазам соединения
 
 	// Прогрев: первые запросы платят за TCP, TLS и холодные кэши сервера,
@@ -37,51 +35,39 @@ type Config struct {
 	HTTP2            bool
 }
 
+// maxRate — один запрос в наносекунду: плотнее расписание непредставимо
+// в time.Duration, offset() схлопывается в ноль, а stats теряет поправку.
+const maxRate = float64(time.Second)
+
 // Validate отвергает противоречивый прогон до первого запроса: иначе
-// ошибка конфигурации выглядит как N одинаковых отказов сервера.
+// ошибка конфигурации выглядит как N одинаковых отказов сервера. Это
+// вход runner, а не дубль проверок в cmd: Config может прийти не из флагов.
 //
-// Проверки сгруппированы по предмету, а не свалены в список: правила про
-// одно и то же поле должны стоять рядом, иначе следующее правило про
-// потоки припишут в третье место.
+// Проверки сгруппированы по предмету: куда бить, чем, сколько и как долго.
+// Правила про одно поле стоят рядом, иначе следующее припишут в третье место.
 func (c Config) Validate() error {
-	if err := c.validateTarget(); err != nil {
-		return err
+	for _, check := range []func() error{
+		c.validateTarget, c.validateRequest, c.validateWorkload, c.validateWarmup,
+	} {
+		if err := check(); err != nil {
+			return err
+		}
 	}
-	if err := c.validateHeaders(); err != nil {
-		return err
-	}
-	if err := c.validateWorkload(); err != nil {
-		return err
-	}
-	// Таймаут не относится ни к цели, ни к объёму: это предел одного запроса.
-	if c.Timeout <= 0 {
-		return fmt.Errorf("timeout должен быть > 0, получено %v", c.Timeout)
-	}
-	return c.validateWarmup()
+	return nil
 }
 
 // validateTarget — куда бить. url.Parse принимает "localhost:8080/api" молча,
-// считая "localhost" схемой: без этой проверки прогон разваливался на N
-// одинаковых отказов с бесполезным "other" вместо одной строки на старте.
+// считая "localhost" схемой.
 func (c Config) validateTarget() error {
-	// Метод — token по RFC 7230; http.NewRequest проверит то же, но уже
-	// после шапки. Пустой Go молча превращает в GET — это не «не задано»,
-	// а ошибка: человек написал -m.
-	if !isToken(c.Method) {
-		return fmt.Errorf("метод %q — не HTTP-токен", c.Method)
-	}
 	if c.URL == "" {
 		return errors.New("URL не задан")
 	}
-
 	u, err := url.Parse(c.URL)
 	if err != nil {
 		return fmt.Errorf("некорректный URL: %w", err)
 	}
 	// gRPC — граница проекта, не забытая схема: «без схемы http://» отправил
 	// бы человека дописывать http и получать N отказов от gRPC-сервера.
-	// Причина в README «Границы»: успех, коды и фазы — HTTP-семантика,
-	// и она же в JSON-контракте.
 	if u.Scheme == "grpc" || u.Scheme == "grpcs" {
 		return errors.New("gRPC не поддерживается: loadgen — нагрузочник для HTTP, см. README «Границы»")
 	}
@@ -94,35 +80,19 @@ func (c Config) validateTarget() error {
 	return nil
 }
 
-// tchar — символы token по RFC 7230 сверх букв и цифр.
-const tchar = "!#$%&'*+-.^_`|~"
-
-func isToken(s string) bool {
-	if s == "" {
-		return false
+// validateRequest — чем бить. Go проверяет метод в NewRequest, а заголовки
+// в Transport.Do — оба после шапки; здесь — до. Пустой метод Go молча
+// превращает в GET, но человек написал -m: это ошибка, а не «не задано».
+func (c Config) validateRequest() error {
+	if !isToken(c.Method) {
+		return fmt.Errorf("метод %q — не HTTP-токен", c.Method)
 	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
-		case strings.IndexByte(tchar, c) >= 0:
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-// validateHeaders — имя это token, значение без управляющих символов
-// (RFC 7230). Go проверяет то же в Transport.Do — после шапки и на каждом
-// запросе: CR/LF в -H доезжали до статистики как «other», rc=2.
-func (c Config) validateHeaders() error {
 	for name, values := range c.Headers {
 		if !isToken(name) {
 			return fmt.Errorf("заголовок %q: имя — не HTTP-токен", name)
 		}
 		for _, v := range values {
-			if !validFieldValue(v) {
+			if !isFieldValue(v) {
 				return fmt.Errorf("заголовок %q: значение содержит управляющий символ", name)
 			}
 		}
@@ -130,17 +100,7 @@ func (c Config) validateHeaders() error {
 	return nil
 }
 
-// validFieldValue — VCHAR, SP, HTAB и obs-text; управляющие и DEL — нет.
-func validFieldValue(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; c < 0x20 && c != '\t' || c == 0x7f {
-			return false
-		}
-	}
-	return true
-}
-
-// validateWorkload — сколько работы и в сколько рук.
+// validateWorkload — сколько работы, как долго и в сколько рук.
 func (c Config) validateWorkload() error {
 	// Ноль — «не задано», отрицательное — ошибка, как у timeout и rate.
 	if c.Duration < 0 {
@@ -151,6 +111,16 @@ func (c Config) validateWorkload() error {
 	}
 	if c.Requests > 0 && c.Duration > 0 {
 		return errors.New("-n и -z взаимоисключающи")
+	}
+	// Таймаут — предел одного запроса; ноль сделал бы каждый запрос отказом.
+	if c.Timeout <= 0 {
+		return fmt.Errorf("timeout должен быть > 0, получено %v", c.Timeout)
+	}
+
+	// Одна проверка на всё: NaN не проходит ни одно сравнение, Inf и
+	// отрицательное — диапазон.
+	if !(c.Rate >= 0 && c.Rate <= maxRate) {
+		return fmt.Errorf("rate должен быть числом от 0 до %g, получено %v", maxRate, c.Rate)
 	}
 
 	if c.Concurrency < 1 {
@@ -164,15 +134,6 @@ func (c Config) validateWorkload() error {
 		return fmt.Errorf("потоков (%d) больше, чем запросов (%d): лишние не сделают ничего",
 			c.Concurrency, c.Requests)
 	}
-
-	// Не дубль проверки в cmd: Validate — публичный вход runner, и Config
-	// может прийти не из флагов. NaN и Inf проходят через «< 0» молча.
-	if math.IsNaN(c.Rate) || math.IsInf(c.Rate, 0) {
-		return fmt.Errorf("rate должен быть числом, получено %v", c.Rate)
-	}
-	if c.Rate < 0 {
-		return fmt.Errorf("rate не может быть отрицательным, получено %v", c.Rate)
-	}
 	return nil
 }
 
@@ -183,7 +144,6 @@ func (c Config) validateWarmup() error {
 	if c.WarmupRequests > 0 && c.WarmupDuration > 0 {
 		return errors.New("прогрев задаётся либо числом запросов, либо длительностью, но не обоими")
 	}
-
 	// Прогрев, съедающий весь прогон, оставляет пустую статистику —
 	// это молчаливо бесполезный результат, лучше сказать сразу.
 	if c.Requests > 0 && c.WarmupRequests >= c.Requests {
