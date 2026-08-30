@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,9 @@ func (f *finiteFlag) Set(s string) error {
 	return nil
 }
 
+// String у своих Value отдаёт пусто: flag зовёт его только ради
+// «(default …)» в -h, а умолчаний у этих флагов нет.
+
 type headerFlag struct {
 	h http.Header
 }
@@ -47,15 +51,7 @@ type headerFlag struct {
 // -H повторяется, значит в файле ему можно дать список: см. repeatable в file.go.
 func (*headerFlag) repeatable() {}
 
-func (f *headerFlag) String() string {
-	parts := make([]string, 0, len(f.h))
-	for k, vs := range f.h {
-		for _, v := range vs {
-			parts = append(parts, k+": "+v)
-		}
-	}
-	return strings.Join(parts, ", ")
-}
+func (*headerFlag) String() string { return "" }
 
 func (f *headerFlag) Set(value string) error {
 	k, v, ok := strings.Cut(value, ":")
@@ -70,6 +66,25 @@ func (f *headerFlag) Set(value string) error {
 	return nil
 }
 
+// bodyFlag — тело запроса: строка как есть или «@путь» — содержимое файла,
+// как у curl. Argv ограничен 128 КБ на аргумент, файл — нет.
+type bodyFlag struct{ b []byte }
+
+func (*bodyFlag) String() string { return "" }
+
+func (f *bodyFlag) Set(s string) error {
+	if !strings.HasPrefix(s, "@") {
+		f.b = []byte(s)
+		return nil
+	}
+	b, err := os.ReadFile(s[1:]) //nolint:gosec // путь называет человек флагом -d
+	if err != nil {
+		return err
+	}
+	f.b = b
+	return nil
+}
+
 // warmupFlag принимает либо длительность («5s»), либо число запросов («100»).
 // Формы различимы однозначно: time.ParseDuration требует единицы измерения,
 // поэтому «100» ей не подходит, а «5s» не подходит strconv.Atoi.
@@ -78,15 +93,7 @@ type warmupFlag struct {
 	duration time.Duration
 }
 
-func (f *warmupFlag) String() string {
-	switch {
-	case f.duration > 0:
-		return f.duration.String()
-	case f.requests > 0:
-		return strconv.Itoa(f.requests)
-	}
-	return ""
-}
+func (*warmupFlag) String() string { return "" }
 
 func (f *warmupFlag) Set(value string) error {
 	// Повторный флаг перетирает предыдущий целиком, как это делают обычные
@@ -111,7 +118,6 @@ type flags struct {
 	n, c        *int
 	z, timeout  *time.Duration
 	method      *string
-	body        *string
 	output      *string
 	trace       *bool
 	insecure    *bool
@@ -130,6 +136,7 @@ type flags struct {
 	regressP99   finiteFlag
 	regressRPS   finiteFlag
 	sloErrorRate finiteFlag
+	body         bodyFlag
 	headers      headerFlag
 	warmup       warmupFlag
 }
@@ -143,7 +150,6 @@ func newFlags(stderr io.Writer) *flags {
 		c:           fs.Int("c", 50, "конкурентность; в open-loop — потолок запросов в полёте"),
 		z:           fs.Duration("z", 0, "длительность прогона (взаимоисключающе с -n)"),
 		method:      fs.String("m", "GET", "HTTP-метод"),
-		body:        fs.String("d", "", "тело запроса"),
 		timeout:     fs.Duration("t", 10*time.Second, "таймаут запроса"),
 		output:      fs.String("o", "text", "формат вывода: text, json или prom"),
 		trace:       fs.Bool("trace", false, "разбить latency по фазам: DNS, TCP, TLS, TTFB"),
@@ -164,6 +170,7 @@ func newFlags(stderr io.Writer) *flags {
 	fs.Var(&f.regressP99, "regress-p99", "при сравнении: насколько процентов p99 позволено вырасти, иначе код 3")
 	fs.Var(&f.regressRPS, "regress-rps", "при сравнении: насколько процентов RPS позволено упасть, иначе код 3")
 	fs.Var(&f.sloErrorRate, "slo-error-rate", "порог приёмки: доля не-2xx в процентах (0–100), иначе код 3")
+	fs.Var(&f.body, "d", "тело запроса; @файл — прочитать из файла")
 	fs.Var(&f.headers, "H", "заголовок в формате 'Key: Value' (можно несколько раз)")
 	fs.Var(&f.warmup, "warmup", "прогрев: длительность (5s) или число запросов (100), в статистику не идёт")
 
@@ -218,7 +225,7 @@ func (f *flags) namedRules(set map[string]bool) error {
 	}
 	// Тело без метода — это GET с телом. По HTTP законно, но человек почти
 	// наверняка имел в виду POST и молча получит не тот прогон.
-	if *f.body != "" && !set["m"] {
+	if len(f.body.b) > 0 && !set["m"] {
 		return errors.New("-d задан без -m: тело уйдёт методом GET; укажите -m POST")
 	}
 	return nil
@@ -264,7 +271,7 @@ func (f *flags) config() (runner.Config, error) {
 	cfg := runner.Config{
 		URL:              f.fs.Arg(0),
 		Method:           method,
-		Body:             []byte(*f.body),
+		Body:             f.body.b,
 		Headers:          headers,
 		Requests:         requests,
 		Duration:         *f.z,

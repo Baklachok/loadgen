@@ -5,6 +5,7 @@ package report
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -64,6 +65,11 @@ func ReadSummary(r io.Reader) (RunSummary, error) {
 	var s RunSummary
 	if err := json.NewDecoder(r).Decode(&s); err != nil {
 		return RunSummary{}, fmt.Errorf("не разобрать отчёт: %w", err)
+	}
+	// Ноль — поля нет: это чужой JSON, а не отчёт другой версии; версии
+	// начинаются с 1. Сказать «снят другой версией» — послать искать бинарь.
+	if s.Schema == 0 {
+		return RunSummary{}, errors.New("нет поля schema: это не отчёт loadgen")
 	}
 	if s.Schema != SchemaVersion {
 		return RunSummary{}, fmt.Errorf("схема %d, а понимаем %d: отчёт снят другой версией", s.Schema, SchemaVersion)

@@ -51,6 +51,19 @@ func TestReadSummary(t *testing.T) {
 
 	// null означает «замеров не хватило». Ноль на его месте вернул бы ту
 	// самую ложь, ради устранения которой null и появился.
+	// JSON без schema — не отчёт другой версии, а не отчёт вовсе: чужой
+	// файл или не тот путь. Причина обязана быть названа своя.
+	t.Run("без schema — не отчёт", func(t *testing.T) {
+		alien := strings.Replace(string(raw), fmt.Sprintf(`"schema": %d`, SchemaVersion), `"_schema": 0`, 1)
+		_, err := ReadSummary(strings.NewReader(alien))
+		if err == nil {
+			t.Fatal("документ без schema принят")
+		}
+		if !strings.Contains(err.Error(), "не отчёт") || strings.Contains(err.Error(), "другой версией") {
+			t.Errorf("причина названа не своя: %v", err)
+		}
+	})
+
 	t.Run("недостоверный перцентиль остаётся пустым", func(t *testing.T) {
 		var b strings.Builder
 		for _, line := range strings.Split(string(raw), "\n") {

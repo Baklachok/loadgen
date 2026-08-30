@@ -28,6 +28,7 @@ func fromFile(t *testing.T, body string, args ...string) (runner.Config, error) 
 // Файл — это те же флаги: каждый ключ обязан дать ровно то, что дал бы флаг.
 func TestFileEqualsFlags(t *testing.T) {
 	const url = "http://localhost:8080/"
+	bodyPath := yamlFile(t, "тело\n")
 
 	tests := []struct {
 		name string
@@ -41,6 +42,7 @@ func TestFileEqualsFlags(t *testing.T) {
 		// Тело без метода отвергает матрица несовместимостей — она общая для
 		// файла и флагов, поэтому method здесь обязателен с обеих сторон.
 		{"body", "method: POST\nd: '{\"a\":1}'", []string{"-m", "POST", "-d", `{"a":1}`}},
+		{"body из файла", "method: POST\nbody: \"@" + bodyPath + "\"", []string{"-m", "POST", "-d", "@" + bodyPath}},
 		{"timeout", "timeout: 3s", []string{"-t", "3s"}},
 		{"rate", "rate: 250", []string{"-rate", "250"}},
 		{"warmup по числу", "warmup: 10", []string{"-warmup", "10"}},

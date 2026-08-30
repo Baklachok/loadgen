@@ -2,6 +2,8 @@ package main
 
 import (
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -186,5 +188,26 @@ func TestNumericFlagsRejectNonFinite(t *testing.T) {
 				t.Errorf("%q отвергнуто: %v", good, err)
 			}
 		})
+	}
+}
+
+// -d @путь читает тело из файла, как curl: argv ограничен 128 КБ на аргумент.
+// Содержимое уходит байт в байт — с переводом строки и не-ASCII.
+func TestBodyFromFile(t *testing.T) {
+	want := "{\"кто\": \"ёж\"}\n"
+	path := filepath.Join(t.TempDir(), "body.json")
+	if err := os.WriteFile(path, []byte(want), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := string(accepts(t, "-m", "POST", "-d", "@"+path).Body); got != want {
+		t.Errorf("тело %q, ожидалось содержимое файла %q", got, want)
+	}
+	if got := string(accepts(t, "-m", "POST", "-d", "x").Body); got != "x" {
+		t.Errorf("литеральное тело %q, ожидалось x", got)
+	}
+	err := newFlags(io.Discard).parse([]string{"-m", "POST", "-d", "@" + filepath.Join(t.TempDir(), "нет"), localURL})
+	if err == nil || !strings.Contains(err.Error(), "-d") {
+		t.Errorf("несуществующий файл: %v", err)
 	}
 }
